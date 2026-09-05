@@ -40,14 +40,14 @@ jobs:
         run: nix flake lock
 
       - name: Build
-        run: nix build .#concat --print-build-logs
+        run: nix build .#puppetcat --print-build-logs
 
       # A window cannot open on the runner, so the check is that the binary
       # is there, links, and resolves every library it needs.
       - name: Check the binary links
         run: |
-          file result/bin/.concat-wrapped || file result/bin/concat
-          ldd result/bin/.concat-wrapped 2>/dev/null | grep -i 'not found' && exit 1 || true
+          file result/bin/.puppetcat-wrapped || file result/bin/puppetcat
+          ldd result/bin/.puppetcat-wrapped 2>/dev/null | grep -i 'not found' && exit 1 || true
 
       # A lock CI wrote is a lock the repo should carry: the next run then
       # builds exactly this, and so does everyone running `nix build`.

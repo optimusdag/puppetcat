@@ -51,8 +51,8 @@ jobs:
           sha=$(git rev-parse --short=10 HEAD)
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' engine/Cargo.toml | head -1)
           cd bundles
-          for file in Concat-*; do
-            mv "$file" "${file/Concat-$version/Concat-$version-nightly.$sha}"
+          for file in PuppetCat-*; do
+            mv "$file" "${file/PuppetCat-$version/PuppetCat-$version-nightly.$sha}"
           done
           sha256sum -- * > SHA256SUMS
           ls -l

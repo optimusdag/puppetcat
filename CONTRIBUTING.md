@@ -1,26 +1,23 @@
-# Contributing to Concat
+# Contributing to PuppetCat
 
-Thanks for being here. Concat is a video editor that runs entirely on the
+Thanks for being here. PuppetCat is a video editor that runs entirely on the
 user's machine, and it gets better mostly through people using it hard and
 reporting what broke.
 
 ## The most valuable thing you can do
 
-Grab a build from the [Releases](https://github.com/jub0t/Concat/releases) page
+Grab a build from the [Releases](https://github.com/optimusdag/puppetcat/releases) page
 and edit a real video with it. Real footage finds what no reading of the
 source does. A good bug report — what you did, what happened, your
 OS, the media you used — is worth more than most patches.
 
-Longer-form discussion lives in
-[the contribution discussion](https://github.com/jub0t/Concat/discussions/3)
-and on [Discord](https://discord.gg/DVuPfpXfqP).
-
 ## Before you write code
 
-Open an issue or drop into Discord first for anything beyond a small fix. Large
-areas of [`ROADMAP.MD`](ROADMAP.MD) are already in progress or intentionally
-deferred, and it is genuinely no fun to review a big PR that has to be turned
-down for reasons that were invisible from outside.
+Open an issue first for anything beyond a small fix. Large
+areas of [`ROADMAP.MD`](ROADMAP.MD) are inherited from upstream and may be
+in progress, deferred, or no longer the direction this fork wants, and it is
+genuinely no fun to review a big PR that has to be turned down for reasons
+that were invisible from outside.
 
 ## Setting up
 
@@ -58,13 +55,13 @@ around you; the engine avoids cleverness on purpose.
 
 ## Licensing your contribution
 
-Concat is **AGPL-3.0-or-later** ([`LICENSE`](LICENSE)), with a plugin exception
-so that Concat API plugins can carry their own licence
+PuppetCat is **AGPL-3.0-or-later** ([`LICENSE`](LICENSE)), with a plugin exception
+so that PuppetCat API plugins can carry their own licence
 ([`LICENSE-EXCEPTIONS.md`](LICENSE-EXCEPTIONS.md)).
 
 Contributions are accepted under the CLA in [`CLA.md`](CLA.md). **You keep the
 copyright in your work** — the CLA is a licence, not an assignment. It exists so
-that copyright in Concat stays centralised, which is what makes the AGPL
+that copyright in PuppetCat stays centralised, which is what makes the AGPL
 enforceable against companies that take the code without honouring it.
 
 Sign off your commits to indicate agreement:
@@ -77,15 +74,17 @@ Typo and documentation fixes do not need a sign-off.
 
 ### File headers
 
-Every source file starts with:
+New source files start with:
 
 ```rust
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
+// SPDX-FileCopyrightText: 2026 PuppetCat contributors
 ```
 
-Keep your own copyright line if you want one — add it, don't replace what's
-there.
+Files inherited from Concat keep their original copyright line
+(`Jareer and Concat contributors`) — that is a historical record, not a
+placeholder, and it is not replaced by editing the file. Add your own line
+alongside it if you want one; don't remove what's there.
 
 ### Third-party code
 
@@ -96,11 +95,12 @@ catch before a merge than after a release.
 
 ## Trademarks
 
-The code is free to fork. The Concat name and logo are not covered by the AGPL
-grant — see [`TRADEMARK.md`](TRADEMARK.md). Forks are welcome; please ship them
-under your own name.
+The code is free to fork. The PuppetCat name and logo are not covered by the
+AGPL grant — see [`TRADEMARK.md`](TRADEMARK.md). Forks are welcome; please
+ship them under your own name, the same courtesy this project extends to
+Concat, the project it was forked from.
 
 ## Conduct
 
-[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) applies to the repo, the Discussions
-and Discord.
+[`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) applies to the repo and its
+Discussions.

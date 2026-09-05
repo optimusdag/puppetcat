@@ -1,8 +1,8 @@
 {
-  # Concat on Nix, Linux only: the people asking for a flake run Linux, and
+  # PuppetCat on Nix, Linux only: the people asking for a flake run Linux, and
   # the macOS and Windows builds ship from release.yml.
   #
-  #   nix build            the editor window, ./result/bin/concat
+  #   nix build            the editor window, ./result/bin/puppetcat
   #   nix run              build and launch it
   #   nix develop          a shell with everything `cargo run -p concat` needs
   #
@@ -24,7 +24,7 @@
   # wgpu`) rather than Skia: skia-bindings also downloads its binaries at
   # build time, and the wgpu renderer is pure Rust. Vulkan is loaded at run
   # time, hence the LD_LIBRARY_PATH on the wrapper.
-  description = "Concat - free and open source video editor";
+  description = "PuppetCat - free and open source video editor, a fork of Concat";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -101,9 +101,9 @@
     in
     {
       packages = eachSystem (pkgs: rec {
-        default = concat;
-        concat = pkgs.rustPlatform.buildRustPackage {
-          pname = "concat";
+        default = puppetcat;
+        puppetcat = pkgs.rustPlatform.buildRustPackage {
+          pname = "puppetcat";
           version = "0.2.0";
           src = self;
 
@@ -139,10 +139,10 @@
 
           desktopItems = [
             (pkgs.makeDesktopItem {
-              name = "concat";
-              exec = "concat";
-              icon = "concat";
-              desktopName = "Concat";
+              name = "puppetcat";
+              exec = "puppetcat";
+              icon = "puppetcat";
+              desktopName = "PuppetCat";
               comment = "Free and open source video editor";
               categories = [
                 "AudioVideo"
@@ -151,17 +151,22 @@
             })
           ];
 
+          # The crate/binary Cargo produces is still named `concat` (only the
+          # product-facing name changed in this fork, not the Rust package);
+          # renamed here so the installed program matches the desktop entry
+          # and `nix run .#puppetcat` above.
           postInstall = ''
-            install -Dm644 assets/concat_logo_512.png \
-              $out/share/icons/hicolor/512x512/apps/concat.png
+            mv $out/bin/concat $out/bin/puppetcat
+            install -Dm644 assets/puppetcat_logo_512.png \
+              $out/share/icons/hicolor/512x512/apps/puppetcat.png
           '';
 
           meta = {
-            description = "Free and open source video editor";
-            homepage = "https://github.com/jub0t/Concat";
+            description = "Free and open source video editor, a fork of Concat";
+            homepage = "https://github.com/optimusdag/puppetcat";
             license = pkgs.lib.licenses.agpl3Plus;
             platforms = systems;
-            mainProgram = "concat";
+            mainProgram = "puppetcat";
           };
         };
       });
@@ -183,7 +188,7 @@
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (runtimeLibs pkgs);
 
           shellHook = ''
-            echo "Concat: cd engine && cargo run -p concat --no-default-features --features wgpu"
+            echo "PuppetCat: cd engine && cargo run -p concat --no-default-features --features wgpu"
           '';
         };
       });

@@ -1,6 +1,6 @@
-# Translating Concat
+# Translating PuppetCat
 
-Concat's interface is built in Slint, and Slint's `@tr()` mechanism produces
+PuppetCat's interface is built in Slint, and Slint's `@tr()` mechanism produces
 standard gettext `.po` files, the format translators already know how to
 work with. The string catalogue is being wrapped for it; when it lands, this
 file carries the instructions for adding a language: where the `.po` files

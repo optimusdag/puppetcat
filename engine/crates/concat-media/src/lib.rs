@@ -25,7 +25,7 @@ pub mod samples;
 pub mod treat;
 
 pub use decode::{DecodeOptions, Decoder, FrameSource, SeekableSource};
-pub use encode::{EncodeOptions, Encoder, FrameSink, jpeg};
+pub use encode::{EncodeOptions, Encoder, FrameSink, jpeg, png};
 pub use error::{Error, Result};
 pub use ffi::{init, linked_version};
 pub use peaks::Peaks;

@@ -41,7 +41,7 @@ mod sysinfo;
 
 use dock::{Dock, SEAT_MIN_GRAB, SEAT_MIN_H, SEAT_MIN_W};
 use host::{Host, Shell};
-use studio::{LANGUAGES, Models, OUTPUTS, RESOLUTIONS, START_RATES, Studio};
+use studio::{LANGUAGES, Models, OUTPUTS, PLATFORM_PRESETS, RESOLUTIONS, START_RATES, Studio};
 use ui::*;
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -181,6 +181,12 @@ fn main() -> Result<(), slint::PlatformError> {
             .map(|(label, _, _)| SharedString::from(*label))
             .collect::<Vec<_>>(),
     ))));
+    app.set_start_presets(ModelRc::from(Rc::new(VecModel::from(
+        PLATFORM_PRESETS
+            .iter()
+            .map(|(label, _, _)| SharedString::from(*label))
+            .collect::<Vec<_>>(),
+    ))));
     app.set_languages(ModelRc::from(Rc::new(VecModel::from(
         LANGUAGES
             .iter()
@@ -254,6 +260,9 @@ fn main() -> Result<(), slint::PlatformError> {
     }));
     app.on_start_rate_changed(on_window!(|state, index: i32| {
         state.start.rate = (index.max(0) as usize).min(START_RATES.len() - 1);
+    }));
+    app.on_start_preset_chosen(on_window!(|state, index: i32| {
+        state.choose_start_preset(index.max(0) as usize);
     }));
     app.on_start_dismiss_error(on_window!(|state| {
         state.start.error.clear();

@@ -1,4 +1,4 @@
-# Concat Architecture
+# PuppetCat Architecture
 
 A study map of the system as it stands in September 2026: what each layer
 owns, how they talk, where the sharp edges are, and what deserves attention

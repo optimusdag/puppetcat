@@ -5,10 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Concat, the editor window: the Slint front end that drives the engine."
+description = "PuppetCat, the editor window: the Slint front end that drives the engine. A fork of Concat."
 
-# The product's name is the binary's name, unsuffixed: `concat` is what a
-# user launches, and the concat-* crates are what it is made of.
+# The crate keeps the upstream `concat` name and the concat-* prefix its
+# siblings share - this fork's rename is product-facing only (see
+# TRADEMARK.md): the app users see, launch and download is PuppetCat, but
+# packaging (flake.nix, CI) is what renames the built artifact, not Cargo.
 [[bin]]
 name = "concat"
 path = "src/main.rs"

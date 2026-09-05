@@ -1,9 +1,9 @@
-# Concat Contributor Licence Agreement
+# PuppetCat Contributor Licence Agreement
 
 **Version 1.0**
 
-Thank you for contributing to Concat. This agreement sets out the terms under
-which your contribution is accepted. It exists so that Concat's copyright stays
+Thank you for contributing to PuppetCat. This agreement sets out the terms under
+which your contribution is accepted. It exists so that PuppetCat's copyright stays
 in one place, which is what makes it possible to enforce the AGPL against
 anyone who violates it, and to keep offering the project under a licence of the
 maintainers' choosing.
@@ -19,8 +19,8 @@ other form — you agree to the following.
 
 **"You"** means the individual or legal entity submitting the contribution.
 **"Contribution"** means any original work of authorship you intentionally
-submit for inclusion in Concat. **"Project"** means Concat and the maintainers
-of the repository at <https://github.com/jub0t/Concat>.
+submit for inclusion in PuppetCat. **"Project"** means PuppetCat and the maintainers
+of the repository at <https://github.com/optimusdag/puppetcat>.
 
 ## 2. Copyright licence
 
@@ -35,9 +35,9 @@ You grant the Project a perpetual, worldwide, non-exclusive, royalty-free,
 irrevocable (except as stated below) patent licence to make, have made, use,
 offer to sell, sell, import and otherwise transfer your Contribution, covering
 only those patent claims you own or control that are necessarily infringed by
-your Contribution alone or by its combination with Concat.
+your Contribution alone or by its combination with PuppetCat.
 
-If you institute patent litigation alleging that Concat, or a Contribution
+If you institute patent litigation alleging that PuppetCat, or a Contribution
 incorporated in it, constitutes direct or contributory patent infringement,
 the patent licences granted to you under this agreement terminate.
 
@@ -47,11 +47,11 @@ You agree that the Project may license your Contribution:
 
 - under AGPL-3.0-or-later, together with the exceptions in
   [`LICENSE-EXCEPTIONS.md`](LICENSE-EXCEPTIONS.md); and
-- under other licence terms, including commercial terms, as part of Concat.
+- under other licence terms, including commercial terms, as part of PuppetCat.
 
 This is what allows the Project to offer commercial licences to organisations
-that cannot use the AGPL, and to adjust Concat's licence in future without
-having to locate every past contributor. Any relicensing applies to Concat as
+that cannot use the AGPL, and to adjust PuppetCat's licence in future without
+having to locate every past contributor. Any relicensing applies to PuppetCat as
 distributed by the Project; it does not restrict your own use of your work, and
 it does not retract the AGPL-licensed releases that already exist.
 
@@ -77,7 +77,7 @@ for the representations you make in section 5.
 
 ## 7. Not a trademark licence
 
-This agreement grants no rights in the Concat name or logo. See
+This agreement grants no rights in the PuppetCat name or logo. See
 [`TRADEMARK.md`](TRADEMARK.md).
 
 ---

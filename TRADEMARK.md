@@ -1,37 +1,50 @@
-# Concat trademark policy
+# PuppetCat trademark policy
 
-The Concat **source code** is free software under AGPL-3.0-or-later. The Concat
-**name and logo** are not part of that grant.
+The PuppetCat **source code** is free software under AGPL-3.0-or-later. The
+PuppetCat **name and logo** are not part of that grant.
 
 This is deliberate and it is normal: the AGPL, like every GNU licence, conveys
 no trademark rights (see AGPL-3.0 section 7(e)). Mozilla, Docker and the Rust
 project all separate the two the same way. The code is yours to fork; the name
 identifies builds that come from this project, so that a user downloading
-"Concat" knows what they are getting.
+"PuppetCat" knows what they are getting.
+
+## PuppetCat is a fork of Concat
+
+PuppetCat began as a fork of [Concat](https://github.com/jub0t/Concat). The
+**Concat** name and logo are not this project's marks — they remain the
+property of Concat's copyright holder (GitHub: [@jub0t](https://github.com/jub0t)),
+under [Concat's own trademark policy](https://github.com/jub0t/Concat/blob/main/TRADEMARK.md).
+This fork does not use the Concat name or logo as its own branding, per that
+policy's terms for modified builds.
 
 ## The marks
 
-- The word mark **Concat**, as the name of this video editor.
-- The Concat logo and its variants, in [`assets/`](assets/).
+- The word mark **PuppetCat**, as the name of this video editor.
+- The PuppetCat logo and its variants, once added under [`assets/`](assets/).
+  <!-- TODO: this fork does not yet have its own logo. The Concat artwork
+       that shipped with the original project must not be reused here —
+       see "What is not allowed" below, and Concat's own trademark policy. -->
 
-Copyright and marks are held by Jareer (GitHub: [@jub0t](https://github.com/jub0t)).
+Copyright and marks are held by [Your name] (GitHub: [@optimusdag](https://github.com/optimusdag)).
 
 ## What you may do without asking
 
 - **Say what your software is.** Nominative use is always fine: "a plugin for
-  Concat", "compatible with Concat", "a fork of Concat", "imports Concat
-  projects". Describe the relationship accurately and you need no permission.
-- **Redistribute official builds** under the name Concat, unmodified.
-- **Package Concat for a distribution** (Nix, Homebrew, AUR, Debian, Flatpak…)
+  PuppetCat", "compatible with PuppetCat", "a fork of PuppetCat", "imports
+  PuppetCat projects". Describe the relationship accurately and you need no
+  permission.
+- **Redistribute official builds** under the name PuppetCat, unmodified.
+- **Package PuppetCat for a distribution** (Nix, Homebrew, AUR, Debian, Flatpak…)
   from unmodified upstream source, keeping the name — patches confined to
   packaging, paths and build flags are fine.
-- **Write about Concat.** Reviews, tutorials, videos, screenshots, comparisons,
+- **Write about PuppetCat.** Reviews, tutorials, videos, screenshots, comparisons,
   academic work. No permission needed, no approval sought.
 - **Use the logo** to link to or refer to this project.
 
 ## What needs a different name
 
-If you distribute a **modified** Concat, please give it your own name and your
+If you distribute a **modified** PuppetCat, please give it your own name and your
 own icon. Concretely, rename before you ship if you:
 
 - change the editor's behaviour, engine, defaults or bundled models;
@@ -40,22 +53,23 @@ own icon. Concretely, rename before you ship if you:
 
 You keep every right the AGPL grants you — fork it, change it, sell it, host
 it. Just call it something else, so bug reports and reputations land in the
-right place. Forks are welcome here; that is the point of the licence.
+right place. Forks are welcome here; that is the point of the licence, and
+it is the same courtesy this project was given by Concat.
 
 ## What is not allowed
 
-- Presenting a modified build as official Concat.
-- Using **Concat** or a confusingly similar name in your product name, company
+- Presenting a modified build as official PuppetCat.
+- Using **PuppetCat** or a confusingly similar name in your product name, company
   name, app-store listing, or domain in a way that implies this project
   endorses or maintains it.
 - Using the logo as your own product's icon or branding.
-- Registering the Concat mark, or a confusingly similar one, in any
+- Registering the PuppetCat mark, or a confusingly similar one, in any
   jurisdiction.
 
 ## Asking
 
 Anything not covered above, or a use you want blessed explicitly:
-**jub0trd@gmail.com**. Reasonable requests get a yes.
+**optimusdag@gmail.com**. Reasonable requests get a yes.
 
 *This policy may be updated. Changes are not retroactive against uses that were
 permitted when made.*

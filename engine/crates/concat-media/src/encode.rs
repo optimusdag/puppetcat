@@ -321,6 +321,61 @@ pub fn jpeg(frame: &Frame, quality: u8) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Encodes one frame as a lossless PNG, for a snapshot handed to something
+/// that must see exactly what was rendered - unlike [`jpeg`], nothing here is
+/// a quality tradeoff.
+///
+/// FFmpeg's PNG encoder takes RGBA directly, so this skips the YUV
+/// `scaling::Context` step `jpeg` needs.
+pub fn png(frame: &Frame) -> Result<Vec<u8>> {
+    ffi::init();
+    let path = Path::new("<png>");
+    let codec = encoder::find_by_name("png").ok_or_else(|| Error::Missing {
+        what: "encoder",
+        name: "png".to_owned(),
+    })?;
+    let mut video = ffmpeg::codec::Context::new_with_codec(codec)
+        .encoder()
+        .video()
+        .map_err(|error| ffi::fail("png encoder", path, error))?;
+    video.set_width(frame.width());
+    video.set_height(frame.height());
+    video.set_format(Pixel::RGBA);
+    video.set_time_base(ffmpeg::Rational::new(1, 25));
+    let mut encoder = video
+        .open()
+        .map_err(|error| ffi::fail("open png encoder", path, error))?;
+
+    let mut rgba = Video::new(Pixel::RGBA, frame.width(), frame.height());
+    {
+        let stride = rgba.stride(0);
+        let row = frame.width() as usize * 4;
+        let data = rgba.data_mut(0);
+        for (y, source) in frame.pixels().chunks_exact(row).enumerate() {
+            data[y * stride..y * stride + row].copy_from_slice(source);
+        }
+    }
+    rgba.set_pts(Some(0));
+
+    encoder
+        .send_frame(&rgba)
+        .map_err(|error| ffi::fail("encode", path, error))?;
+    encoder
+        .send_eof()
+        .map_err(|error| ffi::fail("encode", path, error))?;
+    let mut bytes = Vec::new();
+    loop {
+        let mut packet = ffmpeg::Packet::empty();
+        match encoder.receive_packet(&mut packet) {
+            Ok(()) => bytes.extend_from_slice(packet.data().unwrap_or(&[])),
+            Err(ffmpeg::Error::Eof) => break,
+            Err(error) if ffi::is_again(&error) => break,
+            Err(error) => return Err(ffi::fail("encode", path, error)),
+        }
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +386,17 @@ mod tests {
         frame.fill([200, 40, 40, 255]);
         let bytes = jpeg(&frame, 4).expect("encodes");
         assert!(bytes.starts_with(&[0xFF, 0xD8]), "a JPEG starts with SOI");
+    }
+
+    #[test]
+    fn a_frame_becomes_a_png() {
+        let mut frame = Frame::black(32, 32);
+        frame.fill([40, 200, 40, 255]);
+        let bytes = png(&frame).expect("encodes");
+        assert!(
+            bytes.starts_with(&[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n']),
+            "a PNG starts with its magic number"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
-# Concat Engine
+# PuppetCat Engine
 
-The video engine behind Concat. Rust, no GC, no hidden control flow.
+The video engine behind PuppetCat. Rust, no GC, no hidden control flow.
 
 ## Layout
 

@@ -1,14 +1,18 @@
 # Roadmap
 
-> Concat is still in early development. This roadmap represents the direction of the project rather than guaranteed features or release dates.
+> PuppetCat is still in early development. This roadmap represents the direction of the project rather than guaranteed features or release dates.
+>
+> Inherited from [Concat](https://github.com/jub0t/Concat) at fork time and
+> renamed in place; it has not yet been reviewed against PuppetCat's own
+> priorities. Treat it as a starting point, not a commitment.
 >
 > 🌟 = high priority / especially wanted
 
 ### 🧱 Editor & Core Architecture
 
-* [ ] 🌟 **Concat API** — A stable API shared by the Concat UI, plugins, scripts, automation, and MCP integrations.
+* [ ] 🌟 **PuppetCat API** — A stable API shared by the PuppetCat UI, plugins, scripts, automation, and MCP integrations.
 * [ ] 🌟 **Extensible Effects Runtime** — A scalable, data-driven system capable of supporting hundreds of effects, filters, transitions, and generators, including custom WGSL shaders.
-* [ ] **Hardware Analysis** — Detect device capabilities and performance tier so Concat can automatically choose appropriate playback, rendering, proxy, and processing settings.
+* [ ] **Hardware Analysis** — Detect device capabilities and performance tier so PuppetCat can automatically choose appropriate playback, rendering, proxy, and processing settings.
 * [ ] **Customizable Workspace** — Allow panels to be moved, resized, docked, and rearranged similar to Blender and other professional creative tools.
 
 ### 🎨 Effects, Transitions & Mixers
@@ -21,7 +25,7 @@
 
 ### 📦 Templates & Community Ecosystem
 
-* [ ] 🌟 **Concat Hub / Registry** — A centralized community registry for installing and sharing templates, effects, transitions, caption styles, presets, generators, Mixer creations, and other extensions — somewhat like npm for creative assets.
+* [ ] 🌟 **PuppetCat Hub / Registry** — A centralized community registry for installing and sharing templates, effects, transitions, caption styles, presets, generators, Mixer creations, and other extensions — somewhat like npm for creative assets.
 * [ ] **Improved Templates** — Expand the template system and make templates easier to create, customize, package, and share.
 * [ ] **Stock Media Library** — Integrate accessible stock video, images, music, and sound effects.
 
@@ -62,11 +66,11 @@
 
 * [ ] **Smart Media Search** — Search local project media using speech, filenames, metadata, and eventually visual content.
 * [ ] **Long Video → Clips** — Help identify and extract useful short-form segments from longer recordings.
-* [ ] **Local Media Analysis** — Build reusable background analysis for transcripts, scenes, faces, audio, and other metadata that multiple Concat features can share.
+* [ ] **Local Media Analysis** — Build reusable background analysis for transcripts, scenes, faces, audio, and other metadata that multiple PuppetCat features can share.
 
 ### 🔌 Plugins & Extensibility
 
-* [ ] 🌟 **Plugin System** — Allow developers to extend Concat through the Concat API without modifying the core application.
+* [ ] 🌟 **Plugin System** — Allow developers to extend PuppetCat through the PuppetCat API without modifying the core application.
 * [ ] **Custom Mixer Nodes** — Let developers create reusable nodes for Mixers, including GPU shader nodes and sandboxed processing nodes.
 * [ ] **Extension Permissions & Sandboxing** — Provide a safe capability/permission model for third-party extensions.
 * [ ] **Extension Versioning & Dependencies** — Stable API versions, dependency resolution, compatibility checks, and updates for community extensions.

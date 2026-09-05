@@ -1,0 +1,14 @@
+{
+  "group": "PuppetCat",
+  "icon": "play",
+  "buttons": [
+    {
+      "label": "Run app",
+      "type": "command",
+      "command": "cd \"${CWD}/engine\" && cargo run -p concat",
+      "output": "terminal",
+      "icon": "play",
+      "color": "#8b5cf6"
+    }
+  ]
+}

@@ -99,11 +99,12 @@ const EXPORT_CRF: [u8; 3] = [16, 20, 26];
 const AUDIO_BPS: f32 = 192_000.0;
 
 /// The frame sizes the launch screen offers, and what each label means.
-pub const RESOLUTIONS: [(&str, u32, u32); 4] = [
+pub const RESOLUTIONS: [(&str, u32, u32); 5] = [
     ("1080p", 1920, 1080),
     ("720p", 1280, 720),
     ("4K", 3840, 2160),
     ("Vertical", 1080, 1920),
+    ("Square", 1080, 1080),
 ];
 
 /// The frame rates, as exact fractions. 29.97 is 30000/1001 and never
@@ -115,6 +116,18 @@ pub const START_RATES: [(&str, i64, i64); 5] = [
     ("29.97", 30000, 1001),
     ("30", 30, 1),
     ("60", 60, 1),
+];
+
+/// The launch screen's preset chips: a label, and the index into
+/// [`RESOLUTIONS`] and [`START_RATES`] it fills both ladders with. A preset
+/// is a shortcut into those same two fields, not a third source of truth -
+/// after clicking one, the two segmented controls read back exactly what it
+/// chose and can still be adjusted by hand.
+pub const PLATFORM_PRESETS: [(&str, usize, usize); 4] = [
+    ("YouTube", 0, 3),         // 1920x1080, 30 fps
+    ("TikTok / Reels", 3, 3),  // 1080x1920, 30 fps
+    ("Instagram", 4, 3),       // 1080x1080, 30 fps
+    ("4K", 2, 3),              // 3840x2160, 30 fps
 ];
 
 /// The interface's languages, as Settings > General lists them. One, until
@@ -212,7 +225,7 @@ impl Default for StartState {
         Self {
             name: "Untitled project".into(),
             location: std::env::var("HOME")
-                .map(|home| format!("{home}/Desktop/Concat"))
+                .map(|home| format!("{home}/Desktop/PuppetCat"))
                 .unwrap_or_default(),
             resolution: 0,
             rate: 3,
@@ -3151,6 +3164,15 @@ impl Studio {
                 self.start.busy = false;
                 self.start.error = error;
             }
+        }
+    }
+
+    /// Fills the resolution and frame rate together from one of
+    /// [`PLATFORM_PRESETS`] - the row of chips above the two ladders.
+    pub fn choose_start_preset(&mut self, index: usize) {
+        if let Some(&(_, resolution, rate)) = PLATFORM_PRESETS.get(index) {
+            self.start.resolution = resolution;
+            self.start.rate = rate;
         }
     }
 

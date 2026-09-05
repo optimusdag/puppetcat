@@ -72,7 +72,7 @@ pub fn system_facts() -> Vec<(&'static str, String)> {
     vec![
         (
             "Application",
-            format!("Concat {}", env!("CARGO_PKG_VERSION")),
+            format!("PuppetCat {}", env!("CARGO_PKG_VERSION")),
         ),
         (
             "Build",

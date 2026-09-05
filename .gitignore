@@ -53,3 +53,9 @@ desktop.ini
 # machine-specific.
 /vendor/
 /ffmpeg-dev/
+
+# scripts/package-macos.sh's output: a local, installable build. Machine-
+# specific (ad-hoc signed, or signed with whatever identity is in this
+# Mac's own keychain) and large, so it is never committed.
+/PuppetCat.app/
+/PuppetCat-*.dmg

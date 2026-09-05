@@ -21,10 +21,8 @@ policy's terms for modified builds.
 ## The marks
 
 - The word mark **PuppetCat**, as the name of this video editor.
-- The PuppetCat logo and its variants, once added under [`assets/`](assets/).
-  <!-- TODO: this fork does not yet have its own logo. The Concat artwork
-       that shipped with the original project must not be reused here —
-       see "What is not allowed" below, and Concat's own trademark policy. -->
+- The PuppetCat logo (the circuit-patterned cat mark) and its icon variants
+  under [`assets/`](assets/) and [`assets/icons/`](assets/icons/).
 
 Copyright and marks are held by [Your name] (GitHub: [@optimusdag](https://github.com/optimusdag)).
 

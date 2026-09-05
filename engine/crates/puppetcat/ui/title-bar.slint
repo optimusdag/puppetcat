@@ -127,9 +127,16 @@ export component TitleBar inherits Rectangle {
         padding-right: 8px;
         spacing: 2px;
 
-        // wordmark. No mark: this fork has no logo of its own yet (see
-        // TRADEMARK.md), and Concat's own artwork - still sitting unused at
-        // assets/concat-logo.png - must not be reused as this fork's icon.
+        // mark + wordmark
+        VerticalLayout {
+            alignment: center;
+            Image {
+                width: 16px;
+                height: 16px;
+                source: @image-url("assets/puppetcat-logo.png");
+            }
+        }
+
         VerticalLayout {
             alignment: center;
             padding-left: 6px;

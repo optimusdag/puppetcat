@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/puppetcat_logo_512.png" alt="PuppetCat logo" width="120" />
+
 # PuppetCat
 
 **A free, open-source CapCut-style video editor.**

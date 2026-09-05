@@ -20,6 +20,7 @@
 pub mod dirs;
 pub mod export;
 pub mod jobs;
+pub mod lock;
 pub mod media;
 pub mod playback;
 pub mod preview;
@@ -30,6 +31,7 @@ pub mod titles;
 
 pub use dirs::AppDirs;
 pub use jobs::{Job, SingleFlight};
+pub use lock::{Slot, SlotLock};
 pub use projects::ProjectInfo;
 pub use session::{EditorView, Session, SettingsView};
 pub use titles::{TitleClip, Titles};

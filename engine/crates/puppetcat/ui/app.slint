@@ -19,8 +19,10 @@ import "fonts/Synonym-SemiBold.ttf";
 import { Theme } from "theme/theme.slint";
 import { Bezier, Curves, Fmt, Payload } from "util.slint";
 import { EffectData } from "demo/effects-panel.slint";
+import { Glyph } from "icons.slint";
 import { MediaFilter, MediaItemData, MediaKind } from "workspace/media-pane.slint";
 import { ContextMenu, MenuItemData, MenuRow } from "primitives/context-menu.slint";
+import { Modal } from "primitives/modal.slint";
 import { ExportData, ExportDialog, ExportPhase } from "dialogs/export.slint";
 import { ModelData, SettingsData, SettingsDialog, SystemFactData } from "dialogs/settings.slint";
 import { DockDivider, DockSide, SeatBox } from "dock.slint";
@@ -107,6 +109,15 @@ export component App inherits Window {
     in property <string> project-name: "Untitled project";
     in property <string> project-status: "saved";
     in property <bool> macos;
+
+    // ── blocked by another editor ───────────────────────────────────────
+    //
+    // True while a `puppetcat-agent` session, or another `puppetcat` window,
+    // has the open project's lock: see `puppetcat_host::lock` and
+    // `Studio::poll_lock`. The overlay declared at the end of this file eats
+    // every input while it is open; nothing behind it needs to know why.
+    in property <bool> blocked;
+    in property <string> blocked-reason;
 
     /// The File / Edit / View menus. Built in Rust like every other menu here,
     /// because what belongs on them depends on the project.
@@ -363,6 +374,37 @@ export component App inherits Window {
         menu-height: root.app-menu-height;
         token: root.app-menu-token;
         selected(id) => { root.app-menu-selected(id); }
+    }
+
+    // Over the menus too: another process owning the project means nothing
+    // behind this — not a sheet, not the app menu — has anything safe to do.
+    // `Modal`'s own scrim already swallows every press; `dismissable: false`
+    // drops its close button, the same way `ExportDialog` drops its own
+    // while an export is running.
+    Modal {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        open: root.blocked;
+        dismissable: false;
+        title: "Waiting";
+        glyph: Glyph.lock;
+        surface-width: 360px;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            alignment: center;
+
+            Text {
+                text: root.blocked-reason;
+                color: Theme.fg-muted;
+                font-size: Theme.fs;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+        }
     }
 
     // Last of all, and over everything including the sheets: an export that

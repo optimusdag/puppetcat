@@ -28,7 +28,7 @@ use puppetcat_effects::manifest::Kind as PackageKind;
 use puppetcat_host::export::{self, ExportSpec};
 use puppetcat_host::playback::ClipSpec;
 use puppetcat_host::preview::FrameSpec;
-use puppetcat_host::{ProjectInfo, Session, media, projects, templates};
+use puppetcat_host::{ProjectInfo, Session, Slot, SlotLock, media, projects, templates};
 use puppetcat_media::Peaks;
 use puppetcat_project::commands::{ClipMove, ClipPatch, TrackFlag, TrimEdge};
 use puppetcat_project::model::{
@@ -469,6 +469,18 @@ pub fn sync<T: Clone + PartialEq + 'static>(model: &VecModel<T>, next: Vec<T>) {
     }
 }
 
+/// Why this window currently refuses input, if it does. `Agent` wins over
+/// `OtherWindow` when both are true - see `puppetcat_host::lock` for why an
+/// agent always takes priority over a window that got there first.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockedBy {
+    Nothing,
+    /// A `puppetcat-agent` session has this project open.
+    Agent,
+    /// Another `puppetcat` window has this project open.
+    OtherWindow,
+}
+
 /// The window's state. See the module docs for what is whose.
 pub struct Studio {
     pub host: Host,
@@ -485,6 +497,16 @@ pub struct Studio {
     /// Unsaved changes, and the timer that writes them.
     dirty: bool,
     autosave: slint::Timer,
+
+    // ── cross-process ownership ──
+    /// Held for as long as this window owns the open project's window slot.
+    /// `None` while another window has it - see `lock_watch`.
+    window_lock: Option<SlotLock>,
+    blocked: BlockedBy,
+    /// Polls the project's lock files while one is open: takes the window
+    /// slot the moment it is free, and reloads from disk the moment
+    /// `blocked` clears, so a save made elsewhere is never missed.
+    lock_watch: slint::Timer,
 
     // ── the bin ──
     /// Slint's rows are integers; the document's ids are strings. Assigned
@@ -877,6 +899,9 @@ impl Studio {
             empty: Project::new(),
             dirty: false,
             autosave: slint::Timer::default(),
+            window_lock: None,
+            blocked: BlockedBy::Nothing,
+            lock_watch: slint::Timer::default(),
             media_rows: HashMap::new(),
             next_media_row: 1,
             media_selected: HashSet::new(),
@@ -3132,37 +3157,105 @@ impl Studio {
 
     // ── projects ──
 
+    /// Opens `info` as the session, and the caches and view state that
+    /// follow it. Used both for an explicit open and for the reload
+    /// `poll_lock` forces once this window is no longer blocked - the two
+    /// differ only in what they do with the lock slot and an error, which is
+    /// why those stay out of this and live in each caller.
+    fn load(&mut self, info: &ProjectInfo) -> Result<(), String> {
+        let session = Session::open_info(info)?;
+        if let Err(error) = projects::remember(&self.host.dirs.config, info) {
+            eprintln!("puppetcat: {error}");
+        }
+        self.pause();
+        self.session = Some(session);
+        self.echo = None;
+        self.dirty = false;
+        self.project_name = info.name.clone();
+        self.export.name = projects::folder_name(&info.name);
+        self.selection.clear();
+        self.media_selected.clear();
+        self.lane_view.clear();
+        self.playhead = 0.0;
+        self.scroll_left = 0.0;
+        self.on_start = false;
+        self.preview_failed = false;
+        self.recents = projects::list(&self.host.dirs.config);
+        self.host.monitor.clear();
+        self.sync_audio();
+        self.request_media_art();
+        self.request_preview();
+        Ok(())
+    }
+
     /// Opens a project as the session and leaves the launch screen.
     pub fn open_project(&mut self, info: ProjectInfo) {
-        match Session::open_info(&info) {
-            Ok(session) => {
-                if let Err(error) = projects::remember(&self.host.dirs.config, &info) {
-                    eprintln!("puppetcat: {error}");
-                }
-                self.pause();
-                self.session = Some(session);
-                self.echo = None;
-                self.dirty = false;
-                self.project_name = info.name.clone();
-                self.export.name = projects::folder_name(&info.name);
-                self.selection.clear();
-                self.media_selected.clear();
-                self.lane_view.clear();
-                self.playhead = 0.0;
-                self.scroll_left = 0.0;
-                self.on_start = false;
-                self.preview_failed = false;
+        match self.load(&info) {
+            Ok(()) => {
                 self.start.busy = false;
                 self.start.error.clear();
-                self.recents = projects::list(&self.host.dirs.config);
-                self.host.monitor.clear();
-                self.sync_audio();
-                self.request_media_art();
-                self.request_preview();
+                self.claim_window_slot(&info.path);
             }
             Err(error) => {
                 self.start.busy = false;
                 self.start.error = error;
+            }
+        }
+    }
+
+    /// Takes the window slot for the just-opened project (or notes that
+    /// another window already holds it) and starts polling both slots.
+    fn claim_window_slot(&mut self, path: &str) {
+        let root = std::path::Path::new(path);
+        self.window_lock = SlotLock::try_acquire(root, Slot::Window);
+        self.refresh_blocked(root);
+        self.lock_watch.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(500),
+            || {
+                crate::host::Shell::with(|shell, app| {
+                    {
+                        let mut studio = shell.studio.borrow_mut();
+                        studio.poll_lock();
+                    }
+                    shell.studio.borrow().publish(&app, &shell.models);
+                });
+            },
+        );
+    }
+
+    /// Recomputes `blocked` from the two slots: the agent's, which this
+    /// window never holds and only ever watches, and the window's, which
+    /// `None` here means someone else currently has.
+    fn refresh_blocked(&mut self, root: &std::path::Path) {
+        self.blocked = if SlotLock::is_held(root, Slot::Agent) {
+            BlockedBy::Agent
+        } else if self.window_lock.is_none() {
+            BlockedBy::OtherWindow
+        } else {
+            BlockedBy::Nothing
+        };
+    }
+
+    /// `lock_watch`'s tick: takes the window slot the moment it frees up,
+    /// and reloads the project from disk the moment `blocked` clears, so
+    /// whatever the other owner saved is never missed.
+    fn poll_lock(&mut self) {
+        let Some(session) = self.session.as_ref() else {
+            self.lock_watch.stop();
+            return;
+        };
+        let root = std::path::PathBuf::from(session.path());
+        if self.window_lock.is_none() {
+            self.window_lock = SlotLock::try_acquire(&root, Slot::Window);
+        }
+        let was_blocked = self.blocked != BlockedBy::Nothing;
+        self.refresh_blocked(&root);
+        if was_blocked && self.blocked == BlockedBy::Nothing {
+            let reloaded =
+                projects::open(&root.to_string_lossy()).and_then(|info| self.load(&info));
+            if let Err(error) = reloaded {
+                self.notify(&format!("Could not reload: {error}"), true);
             }
         }
     }
@@ -3220,6 +3313,9 @@ impl Studio {
             }
         }
         self.autosave.stop();
+        self.lock_watch.stop();
+        self.window_lock = None;
+        self.blocked = BlockedBy::Nothing;
         self.session = None;
         self.echo = None;
         self.dirty = false;
@@ -4053,6 +4149,19 @@ impl Studio {
         sync(&models.catalogue_audio, entries);
 
         app.set_on_start(self.on_start);
+        app.set_blocked(self.blocked != BlockedBy::Nothing);
+        app.set_blocked_reason(
+            match self.blocked {
+                BlockedBy::Nothing => "",
+                BlockedBy::Agent => {
+                    "Being edited by an agent - this window will resume when it's done."
+                }
+                BlockedBy::OtherWindow => {
+                    "Already open in another PuppetCat window - this window will resume when it's closed there."
+                }
+            }
+            .into(),
+        );
         app.set_project_name(self.project_name.as_str().into());
         app.set_project_status(
             if self.dirty {

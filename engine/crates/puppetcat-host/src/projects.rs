@@ -279,7 +279,7 @@ fn write_recents(config: &Path, entries: &[ProjectInfo]) -> Result<(), String> {
 }
 
 /// Compares paths case-insensitively, because Windows does.
-fn same_path(left: &str, right: &str) -> bool {
+pub fn same_path(left: &str, right: &str) -> bool {
     left.eq_ignore_ascii_case(right)
 }
 

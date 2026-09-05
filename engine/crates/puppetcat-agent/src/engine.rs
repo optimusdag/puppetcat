@@ -7,12 +7,38 @@
 //! lifecycle and the plumbing an agent needs that the window otherwise
 //! provides for a human (seeing the result, waiting on an export).
 
+use std::path::Path;
 use std::sync::Mutex;
 
+use puppetcat_host::{Slot, SlotLock};
 use puppetcat_media::ReaderPool;
 use puppetcat_project::Command;
 
 use crate::export::{ExportJob, ExportStatus};
+
+/// A session plus the cross-process claim that makes it safe to edit: for as
+/// long as this exists, no `puppetcat` window will accept input on the same
+/// project (see `puppetcat_host::lock`). Bundled with the session, not held
+/// separately, so replacing or clearing one always releases the other in the
+/// same step - an agent never holds the lock for a project it has stopped
+/// editing.
+struct OpenProject {
+    session: puppetcat_host::Session,
+    _lock: SlotLock,
+}
+
+impl std::ops::Deref for OpenProject {
+    type Target = puppetcat_host::Session;
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
+
+impl std::ops::DerefMut for OpenProject {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.session
+    }
+}
 
 /// One open project's session, plus what an agent needs around it that a
 /// human gets from the window: a place to render a still, and the one
@@ -21,7 +47,7 @@ pub struct AgentEngine {
     dirs: puppetcat_host::AppDirs,
     pool: ReaderPool,
     titles: puppetcat_host::Titles,
-    session: Mutex<Option<puppetcat_host::Session>>,
+    open: Mutex<Option<OpenProject>>,
     export: ExportJob,
 }
 
@@ -29,19 +55,26 @@ impl AgentEngine {
     /// Locates this machine's app directories and starts with no project
     /// open.
     pub fn new() -> Result<Self, String> {
-        let dirs = puppetcat_host::AppDirs::locate()?;
+        Self::with_dirs(puppetcat_host::AppDirs::locate()?)
+    }
+
+    /// Starts with no project open, against `dirs` rather than this
+    /// machine's real ones - the seam tests use so they never touch the
+    /// real recents list (`puppetcat_host::AppDirs::under` builds a scratch
+    /// one).
+    fn with_dirs(dirs: puppetcat_host::AppDirs) -> Result<Self, String> {
         let titles = puppetcat_host::Titles::new(&dirs);
         Ok(Self {
             dirs,
             pool: ReaderPool::with_defaults(),
             titles,
-            session: Mutex::new(None),
+            open: Mutex::new(None),
             export: ExportJob::new(),
         })
     }
 
-    fn session_lock(&self) -> std::sync::MutexGuard<'_, Option<puppetcat_host::Session>> {
-        self.session.lock().expect("session mutex")
+    fn session_lock(&self) -> std::sync::MutexGuard<'_, Option<OpenProject>> {
+        self.open.lock().expect("session mutex")
     }
 
     /// Creates a new project folder and opens it as the active session.
@@ -69,9 +102,25 @@ impl AgentEngine {
     }
 
     fn open_session(&self, info: &puppetcat_host::ProjectInfo) -> Result<(), String> {
+        let mut guard = self.session_lock();
+        // Release this project's own lock first when it is the very path
+        // being reopened, so reopening it never reads as some other agent
+        // already holding it. A *different* open project is left alone
+        // until the new one has actually opened, so a failed switch does
+        // not lose it.
+        if guard.as_ref().is_some_and(|open| {
+            puppetcat_host::projects::same_path(open.session.path(), &info.path)
+        }) {
+            *guard = None;
+        }
+        let lock = SlotLock::try_acquire(Path::new(&info.path), Slot::Agent)
+            .ok_or_else(|| "another agent session already has this project open".to_owned())?;
         let session = puppetcat_host::Session::open_info(info)?;
         let _ = puppetcat_host::projects::remember(&self.dirs.config, info);
-        *self.session_lock() = Some(session);
+        *guard = Some(OpenProject {
+            session,
+            _lock: lock,
+        });
         Ok(())
     }
 
@@ -185,4 +234,112 @@ impl AgentEngine {
 
 fn no_project() -> String {
     "no project is open - call create_project or open_project first".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scratch root for one test: a project location and, critically, its
+    /// own `AppDirs` (see `engine` below) - the tests here must never touch
+    /// this machine's real recents list.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "puppetcat-agent-engine-test-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// An `AgentEngine` rooted entirely under `root`, so `create_project`'s
+    /// call to `projects::remember` writes a scratch recents list instead of
+    /// this machine's real one.
+    fn engine(root: &std::path::Path) -> AgentEngine {
+        AgentEngine::with_dirs(puppetcat_host::AppDirs::under(&root.join("dirs")))
+            .expect("builds against a scratch AppDirs")
+    }
+
+    /// Two `AgentEngine`s stand in for two separate `puppetcat-agent-mcp`
+    /// processes: each opens its own file handle on the same lock file, so
+    /// this exercises the same OS-level exclusion two real processes would
+    /// hit, without actually spawning any.
+    #[test]
+    fn a_second_agent_cannot_open_a_project_the_first_already_has() {
+        let root = scratch("two-agents");
+        let first = engine(&root);
+        let info = first
+            .create_project(
+                &root.join("projects").to_string_lossy(),
+                "Shared",
+                1920,
+                1080,
+                30,
+                1,
+            )
+            .expect("creates and opens");
+
+        let second = engine(&root);
+        let error = second
+            .open_project(&info.path)
+            .expect_err("the first agent still has it open");
+        assert!(error.contains("already"), "got: {error}");
+
+        first.close_project().expect("releases the lock");
+        second
+            .open_project(&info.path)
+            .expect("free once the first agent closes it");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The window's slot is independent of the agent's: a window watching
+    /// this project must be able to see the agent's slot as held without
+    /// that check ever depending on, or contending with, the window's own.
+    #[test]
+    fn the_agent_slot_never_blocks_the_window_slot() {
+        let root = scratch("agent-vs-window");
+        let agent = engine(&root);
+        let info = agent
+            .create_project(
+                &root.join("projects").to_string_lossy(),
+                "Shared",
+                1920,
+                1080,
+                30,
+                1,
+            )
+            .expect("creates and opens");
+
+        assert!(puppetcat_host::SlotLock::is_held(
+            Path::new(&info.path),
+            Slot::Agent
+        ));
+        let window = puppetcat_host::SlotLock::try_acquire(Path::new(&info.path), Slot::Window);
+        assert!(window.is_some(), "the window slot must still be free");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Reopening the very project already open here must not read as some
+    /// other agent holding it - a client re-issuing `open_project` on its
+    /// own project should just get a fresh session, not an error.
+    #[test]
+    fn reopening_the_same_project_here_succeeds() {
+        let root = scratch("reopen-self");
+        let agent = engine(&root);
+        let info = agent
+            .create_project(
+                &root.join("projects").to_string_lossy(),
+                "Shared",
+                1920,
+                1080,
+                30,
+                1,
+            )
+            .expect("creates and opens");
+        agent
+            .open_project(&info.path)
+            .expect("reopening its own project is not a conflict");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

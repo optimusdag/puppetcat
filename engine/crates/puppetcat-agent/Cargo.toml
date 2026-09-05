@@ -1,0 +1,32 @@
+[package]
+name = "puppetcat-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Lets an AI agent drive a full editing session headlessly: an MCP server over Session/Command."
+
+[[bin]]
+name = "puppetcat-agent-mcp"
+path = "src/bin/puppetcat-agent-mcp.rs"
+
+[dependencies]
+puppetcat-core.workspace = true
+puppetcat-media.workspace = true
+puppetcat-project.workspace = true
+puppetcat-export.workspace = true
+puppetcat-host.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+
+# Encodes render_snapshot's PNG bytes for the MCP image content block.
+base64 = "0.22"
+
+# The MCP transport is IO-bound (stdin/stdout JSON-RPC), unlike the rest of
+# the engine's CPU-bound render path - see the doc comment on `mcp` for why
+# tokio is scoped to this one crate rather than a workspace-wide change.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+rmcp = { version = "3.2", features = ["server", "macros", "transport-io", "schemars"] }
+
+[lints]
+workspace = true

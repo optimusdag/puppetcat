@@ -93,5 +93,5 @@ The effect catalogue thumbnails are rendered from a photograph by
 Vitaly Gariev on Unsplash (https://unsplash.com/@silverkblack), used
 under the Unsplash License. The source still lives at
 `assets/effect-preview-source.jpg`; the tiles are each effect's real FFmpeg
-chain (`concat-export`'s `chains.rs`) run over it, and are embedded from
+chain (`puppetcat-export`'s `chains.rs`) run over it, and are embedded from
 `engine/crates/concat/ui/assets/effect-previews/`.

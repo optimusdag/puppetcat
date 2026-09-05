@@ -1,6 +1,6 @@
 name: Build app
 
-# Builds PuppetCat - the Slint window, `engine/crates/concat` - for every
+# Builds PuppetCat - the Slint window, `engine/crates/puppetcat` - for every
 # platform and architecture it ships on, each on a runner of that
 # architecture so nothing is cross-compiled, and uploads one artifact per
 # target:
@@ -247,7 +247,7 @@ jobs:
           test -d "sherpa/$stem/lib"
           echo "SHERPA_ONNX_LIB_DIR=$PWD/sherpa/$stem/lib" >> "$GITHUB_ENV"
 
-      # On Windows it links shared (see concat-speech's manifest for why
+      # On Windows it links shared (see puppetcat-speech's manifest for why
       # static cannot work there), from a directory holding only the
       # import libraries. The separation matters: when the sys crate's
       # build script sees DLLs beside the .lib files it tries to copy them
@@ -303,7 +303,7 @@ jobs:
         working-directory: engine
         run: |
           set -o pipefail
-          cargo build --profile app -p concat --target ${{ matrix.target }} 2>&1 | tee build.log
+          cargo build --profile app -p puppetcat --target ${{ matrix.target }} 2>&1 | tee build.log
 
       - name: Build log to the summary (failure only)
         if: failure()
@@ -332,7 +332,7 @@ jobs:
           app=PuppetCat.app
           rm -rf "$app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
-          cp "engine/target/${{ matrix.target }}/app/concat" "$app/Contents/MacOS/puppetcat"
+          cp "engine/target/${{ matrix.target }}/app/puppetcat" "$app/Contents/MacOS/puppetcat"
 
           # The icon set Apple wants: each size and its @2x twin.
           iconset=PuppetCat.iconset
@@ -445,7 +445,7 @@ jobs:
           set -euo pipefail
           name="PuppetCat-${VERSION}-linux-${{ matrix.arch }}"
           mkdir -p "stage/$name/lib"
-          cp "engine/target/${{ matrix.target }}/app/concat" "stage/$name/puppetcat"
+          cp "engine/target/${{ matrix.target }}/app/puppetcat" "stage/$name/puppetcat"
           cp -a ffmpeg-dev/lib/*.so* "stage/$name/lib/"
           cp assets/icons/puppetcat_logo_256.png "stage/$name/puppetcat.png"
           cat > "stage/$name/puppetcat.desktop" <<DESKTOP
@@ -486,7 +486,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $name = "PuppetCat-$env:VERSION-windows-${{ matrix.arch }}"
           New-Item -ItemType Directory -Force "stage\$name" | Out-Null
-          Copy-Item "engine\target\${{ matrix.target }}\app\concat.exe" "stage\$name\puppetcat.exe"
+          Copy-Item "engine\target\${{ matrix.target }}\app\puppetcat.exe" "stage\$name\puppetcat.exe"
           Copy-Item "$env:FFMPEG_DIR\bin\*.dll" "stage\$name\"
           # The sherpa-onnx runtime, set aside by the download step above.
           Copy-Item "$env:SHERPA_DLL_DIR\*.dll" "stage\$name\"

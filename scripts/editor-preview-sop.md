@@ -8,7 +8,7 @@ preview pane.
 
 ## Steps
 
-1. **Run the app** — `cd engine && cargo run --release -p concat`. Stage something presentable:
+1. **Run the app** — `cd engine && cargo run --release -p puppetcat`. Stage something presentable:
    a clip in the media bin, a couple of tracks on the timeline, the playhead
    somewhere interesting. Avoid personal file names in the media panel.
 

@@ -4,7 +4,7 @@
   #
   #   nix build            the editor window, ./result/bin/puppetcat
   #   nix run              build and launch it
-  #   nix develop          a shell with everything `cargo run -p concat` needs
+  #   nix develop          a shell with everything `cargo run -p puppetcat` needs
   #
   # The build is one Cargo workspace under engine/, so cargo dependencies
   # come straight from engine/Cargo.lock and there is no vendor hash to keep
@@ -112,7 +112,7 @@
           cargoLock.lockFile = ./engine/Cargo.lock;
           cargoBuildFlags = [
             "-p"
-            "concat"
+            "puppetcat"
             "--no-default-features"
             "--features"
             "wgpu"
@@ -151,12 +151,7 @@
             })
           ];
 
-          # The crate/binary Cargo produces is still named `concat` (only the
-          # product-facing name changed in this fork, not the Rust package);
-          # renamed here so the installed program matches the desktop entry
-          # and `nix run .#puppetcat` above.
           postInstall = ''
-            mv $out/bin/concat $out/bin/puppetcat
             install -Dm644 assets/puppetcat_logo_512.png \
               $out/share/icons/hicolor/512x512/apps/puppetcat.png
           '';
@@ -188,7 +183,7 @@
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (runtimeLibs pkgs);
 
           shellHook = ''
-            echo "PuppetCat: cd engine && cargo run -p concat --no-default-features --features wgpu"
+            echo "PuppetCat: cd engine && cargo run -p puppetcat --no-default-features --features wgpu"
           '';
         };
       });

@@ -10,11 +10,11 @@ next. File references are current as of this writing.
 
 ```mermaid
 flowchart LR
-    subgraph WINDOW["engine/crates/concat — the window (Slint)"]
+    subgraph WINDOW["engine/crates/puppetcat — the window (Slint)"]
         UI["ui/*.slint<br/>panes, dialogs, primitives"]
         MAIN["src/main.rs · studio.rs<br/>bindings, view state"]
     end
-    subgraph HOST["concat-host · concat-speech"]
+    subgraph HOST["puppetcat-host · puppetcat-speech"]
         SESSION[Session]
         PLAY[Playback]
         MON[Monitor]
@@ -23,12 +23,12 @@ flowchart LR
         SPEECH["Transcriber · Speech"]
     end
     subgraph ENGINE["the engine"]
-        PROJECT[concat-project]
-        EFFECTS[concat-effects]
-        EXPORT[concat-export]
-        RENDER[concat-render]
-        MEDIA[concat-media]
-        CORE[concat-core]
+        PROJECT[puppetcat-project]
+        EFFECTS[puppetcat-effects]
+        EXPORT[puppetcat-export]
+        RENDER[puppetcat-render]
+        MEDIA[puppetcat-media]
+        CORE[puppetcat-core]
     end
     MAIN --> HOST
     HOST --> ENGINE
@@ -47,34 +47,34 @@ There is no wire, no JSON boundary, no second language: the window calls
 Rust functions in-process. The rule therefore has nothing to enforce it but
 discipline, and the risk is that editing logic leaks into the window without
 anyone noticing. The test for a change is whether it could be driven from
-`concat-cli` without a window; if not, it is in the wrong place.
+`puppetcat-cli` without a window; if not, it is in the wrong place.
 
 The dependency arrows point one way:
 
 ```
-concat (window) → concat-speech → concat-host → {export, project, media} → core
+puppetcat (window) → puppetcat-speech → puppetcat-host → {export, project, media} → core
                                               → render → core
                                                  export → effects → project
 ```
 
-`concat-core` depends on nothing. `concat-project` knows nothing about
-rendering. `concat-media` is the only crate that knows FFmpeg exists.
-`concat-effects` knows what an effect *is* (its manifest and its template)
+`puppetcat-core` depends on nothing. `puppetcat-project` knows nothing about
+rendering. `puppetcat-media` is the only crate that knows FFmpeg exists.
+`puppetcat-effects` knows what an effect *is* (its manifest and its template)
 and nothing about running one; the decoder runs FFmpeg chains and the
 compositor will run shaders.
 
 | Crate | Lines | Tests | Owns |
 |---|---|---|---|
-| `concat-core` | 1.6k | 31 | Rational time, frame model, arena handles, timeline model. Zero dependencies. |
-| `concat-media` | 3.4k | 39 | Linked FFmpeg: probe, video decode with filter graphs and frame pacing, audio decode through a graph, H.264 encode, AAC mixing through libavfilter, muxing, waveform peaks, the reader pool with its byte-budgeted frame cache, JPEG stills. |
-| `concat-project` | 3.3k | 41 | The document: model, every edit command, undo `Editor`, `concat.json` round-trip. |
-| `concat-render` | 1.3k | 28 | Compositing. `CpuCompositor` is the reference; `WgpuCompositor` behind `gpu`. |
-| `concat-effects` | 1.1k | 22 | Effect packages: the manifest format, the chain-template expression language, the catalogue. Every built-in effect is a folder under `packages/`, compiled in; user packages load from a directory. |
-| `concat-export` | 2.3k | 6 | Timeline → file: flatten, the frame-by-frame render loop, the paused monitor's true frame. Chains come from `concat-effects`. |
-| `concat-host` | 3.4k | 22 | Sessions, project folders and recents, media caches beside the project, the monitor's reader pool, the export slot, audio playback, templates, one-at-a-time job slots, app directories. |
-| `concat-speech` | 1.2k | 6 | Transcription (whisper.cpp in-process) and text to speech (Kokoro via sherpa-onnx), with model downloads. |
-| `concat-cli` | 0.2k | 3 | Probe/render vertical slice for testing the engine without the app. |
-| `concat` | 4.5k Rust + 14.9k Slint | 3 | The window. Every pane, dialog and primitive, bound to the host layer: sessions, imports, gestures as commands, the monitor, playback, export, speech. |
+| `puppetcat-core` | 1.6k | 31 | Rational time, frame model, arena handles, timeline model. Zero dependencies. |
+| `puppetcat-media` | 3.4k | 39 | Linked FFmpeg: probe, video decode with filter graphs and frame pacing, audio decode through a graph, H.264 encode, AAC mixing through libavfilter, muxing, waveform peaks, the reader pool with its byte-budgeted frame cache, JPEG stills. |
+| `puppetcat-project` | 3.3k | 41 | The document: model, every edit command, undo `Editor`, `puppetcat.json` round-trip. |
+| `puppetcat-render` | 1.3k | 28 | Compositing. `CpuCompositor` is the reference; `WgpuCompositor` behind `gpu`. |
+| `puppetcat-effects` | 1.1k | 22 | Effect packages: the manifest format, the chain-template expression language, the catalogue. Every built-in effect is a folder under `packages/`, compiled in; user packages load from a directory. |
+| `puppetcat-export` | 2.3k | 6 | Timeline → file: flatten, the frame-by-frame render loop, the paused monitor's true frame. Chains come from `puppetcat-effects`. |
+| `puppetcat-host` | 3.4k | 22 | Sessions, project folders and recents, media caches beside the project, the monitor's reader pool, the export slot, audio playback, templates, one-at-a-time job slots, app directories. |
+| `puppetcat-speech` | 1.2k | 6 | Transcription (whisper.cpp in-process) and text to speech (Kokoro via sherpa-onnx), with model downloads. |
+| `puppetcat-cli` | 0.2k | 3 | Probe/render vertical slice for testing the engine without the app. |
+| `puppetcat` | 4.5k Rust + 14.9k Slint | 3 | The window. Every pane, dialog and primitive, bound to the host layer: sessions, imports, gestures as commands, the monitor, playback, export, speech. |
 
 ---
 
@@ -86,8 +86,8 @@ edit round-trips as a function call:
 ```mermaid
 sequenceDiagram
     participant W as window (main.rs)
-    participant S as concat_host::Session
-    participant E as Editor (concat-project)
+    participant S as puppetcat_host::Session
+    participant E as Editor (puppetcat-project)
 
     W->>S: session.apply(Command::SplitClips { .. })
     S->>E: editor.apply(command)
@@ -112,15 +112,15 @@ Key properties:
   and the document; `projects::save` writes to a temporary file and renames,
   so a crash mid-save cannot truncate the project.
 - **The document format is frozen by the documents that exist.** Projects
-  saved as `wolfcut.json` still open; new ones are written as `concat.json`,
-  with the version key the app's current name. The reader never looks at
-  that key.
+  saved as `wolfcut.json` or `concat.json` still open; new ones are written
+  as `puppetcat.json`, with the version key the app's current name. The
+  reader never looks at that key.
 
 ---
 
 ## 3. Media
 
-`concat-media` links the FFmpeg libraries and calls them directly. What that
+`puppetcat-media` links the FFmpeg libraries and calls them directly. What that
 gives, and what it costs:
 
 - **Every frame carries its real presentation timestamp**, so variable
@@ -204,14 +204,14 @@ in order, and a cache in that path is pure overhead.
 
 ```mermaid
 flowchart TB
-    subgraph AUDIO["Audio — concat_host::playback"]
+    subgraph AUDIO["Audio — puppetcat_host::playback"]
         DEC["decode workers<br/>clip span → WAV in cache/audio"]
         MMAP["mmap'd PCM"]
         CPAL["one cpal callback mixes everything"]
         CLK["device sample counter →<br/>position(), 30 Hz position events"]
         DEC --> MMAP --> CPAL --> CLK
     end
-    subgraph VIDEO["Video — concat_host::preview::Monitor"]
+    subgraph VIDEO["Video — puppetcat_host::preview::Monitor"]
         PULL["window pulls one frame per instant<br/>prefetch warms the next few"]
         PF["preview_sources → decoded layers"]
         TEX["WgpuCompositor on the shared device → texture"]
@@ -241,7 +241,7 @@ flowchart TB
 
 ## 5. Export
 
-Hybrid pipeline in `concat-export`:
+Hybrid pipeline in `puppetcat-export`:
 
 - **Picture:** flattened timeline → per-frame composition in-process (CPU or
   wgpu) → the linked H.264 encoder.
@@ -267,14 +267,14 @@ Hybrid pipeline in `concat-export`:
   time. Narration lands as a WAV in the project's `audio/` folder - not
   `cache/`, because a clip on the timeline points at it.
 - Both download models on demand into the app's data directory
-  (`app.concat.editor` under the platform's application-support folder) and
+  (`app.puppetcat.editor` under the platform's application-support folder) and
   refuse a second concurrent run through `SingleFlight`.
 
 ---
 
 ## 7. The window
 
-`engine/crates/concat` is 14.9k lines of `.slint` across the workspace
+`engine/crates/puppetcat` is 14.9k lines of `.slint` across the workspace
 (dockable seats holding four views), the timeline (lanes, tabs, track
 headers, tray), the inspector, the media bin, the launch screen, the export
 and settings sheets, menus, tooltips, toasts, and the primitives under them.
@@ -343,7 +343,7 @@ state and carry on, since every cache here is rebuildable) and apply it once.
 
 ### 8.5 Unbounded growth
 
-- `redo: Vec<Project>` in `concat-project`'s editor has **no cap** (undo is
+- `redo: Vec<Project>` in `puppetcat-project`'s editor has **no cap** (undo is
   capped at 200); each entry is a deep clone of the whole project.
 - The reader pool's cache is bounded; the window's image cache for filmstrips
   needs a bound too, or a long session accumulates textures. Filmstrips are
@@ -373,7 +373,7 @@ else touches the audio path.
 ### 8.8 DTO shapes in the export path
 
 `ExportClip`, `ExportRequest` and `PreviewFrameRequest` are JSON-shaped
-DTOs. `concat-export` could take the engine's `Project` and settings
+DTOs. `puppetcat-export` could take the engine's `Project` and settings
 directly and drop the flattening-through-a-DTO; the `serde` derives on the
 host's view types go with them.
 

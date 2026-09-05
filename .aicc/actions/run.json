@@ -5,7 +5,7 @@
     {
       "label": "Run app",
       "type": "command",
-      "command": "cd \"${CWD}/engine\" && cargo run -p concat",
+      "command": "cd \"${CWD}/engine\" && cargo run -p puppetcat",
       "output": "terminal",
       "icon": "play",
       "color": "#8b5cf6"

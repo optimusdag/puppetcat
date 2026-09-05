@@ -1099,152 +1099,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "concat"
-version = "0.2.0"
-dependencies = [
- "concat-core",
- "concat-effects",
- "concat-export",
- "concat-host",
- "concat-media",
- "concat-project",
- "concat-speech",
- "opener",
- "pollster",
- "rfd",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "wgpu",
-]
-
-[[package]]
-name = "concat-agent"
-version = "0.2.0"
-dependencies = [
- "base64 0.22.1",
- "concat-core",
- "concat-export",
- "concat-host",
- "concat-media",
- "concat-project",
- "rmcp",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "concat-cli"
-version = "0.2.0"
-dependencies = [
- "clap",
- "concat-core",
- "concat-media",
- "concat-render",
-]
-
-[[package]]
-name = "concat-core"
-version = "0.2.0"
-
-[[package]]
-name = "concat-effects"
-version = "0.2.0"
-dependencies = [
- "concat-core",
- "concat-project",
- "naga",
- "serde",
- "thiserror 2.0.20",
- "toml",
-]
-
-[[package]]
-name = "concat-export"
-version = "0.2.0"
-dependencies = [
- "concat-core",
- "concat-effects",
- "concat-media",
- "concat-project",
- "concat-render",
- "serde",
-]
-
-[[package]]
-name = "concat-host"
-version = "0.2.0"
-dependencies = [
- "concat-core",
- "concat-export",
- "concat-media",
- "concat-project",
- "concat-render",
- "concat-text",
- "cpal",
- "memmap2",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "concat-media"
-version = "0.2.0"
-dependencies = [
- "concat-core",
- "ffmpeg-the-third",
- "libc",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "concat-project"
-version = "0.2.0"
-dependencies = [
- "concat-core",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "concat-render"
-version = "0.2.0"
-dependencies = [
- "concat-core",
- "concat-effects",
- "pollster",
- "wgpu",
-]
-
-[[package]]
-name = "concat-speech"
-version = "0.2.0"
-dependencies = [
- "bzip2 0.6.1",
- "concat-host",
- "concat-media",
- "serde",
- "serde_json",
- "sherpa-onnx",
- "tar",
- "ureq",
- "whisper-rs",
-]
-
-[[package]]
-name = "concat-text"
-version = "0.2.0"
-dependencies = [
- "fontdb",
- "rustybuzz",
- "tiny-skia 0.12.0",
- "ttf-parser",
-]
-
-[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4751,6 +4605,152 @@ name = "pulp-wasm-simd-flag"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
+
+[[package]]
+name = "puppetcat"
+version = "0.2.0"
+dependencies = [
+ "opener",
+ "pollster",
+ "puppetcat-core",
+ "puppetcat-effects",
+ "puppetcat-export",
+ "puppetcat-host",
+ "puppetcat-media",
+ "puppetcat-project",
+ "puppetcat-speech",
+ "rfd",
+ "serde",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "wgpu",
+]
+
+[[package]]
+name = "puppetcat-agent"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "puppetcat-core",
+ "puppetcat-export",
+ "puppetcat-host",
+ "puppetcat-media",
+ "puppetcat-project",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "puppetcat-cli"
+version = "0.2.0"
+dependencies = [
+ "clap",
+ "puppetcat-core",
+ "puppetcat-media",
+ "puppetcat-render",
+]
+
+[[package]]
+name = "puppetcat-core"
+version = "0.2.0"
+
+[[package]]
+name = "puppetcat-effects"
+version = "0.2.0"
+dependencies = [
+ "naga",
+ "puppetcat-core",
+ "puppetcat-project",
+ "serde",
+ "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
+name = "puppetcat-export"
+version = "0.2.0"
+dependencies = [
+ "puppetcat-core",
+ "puppetcat-effects",
+ "puppetcat-media",
+ "puppetcat-project",
+ "puppetcat-render",
+ "serde",
+]
+
+[[package]]
+name = "puppetcat-host"
+version = "0.2.0"
+dependencies = [
+ "cpal",
+ "memmap2",
+ "puppetcat-core",
+ "puppetcat-export",
+ "puppetcat-media",
+ "puppetcat-project",
+ "puppetcat-render",
+ "puppetcat-text",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "puppetcat-media"
+version = "0.2.0"
+dependencies = [
+ "ffmpeg-the-third",
+ "libc",
+ "puppetcat-core",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "puppetcat-project"
+version = "0.2.0"
+dependencies = [
+ "puppetcat-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "puppetcat-render"
+version = "0.2.0"
+dependencies = [
+ "pollster",
+ "puppetcat-core",
+ "puppetcat-effects",
+ "wgpu",
+]
+
+[[package]]
+name = "puppetcat-speech"
+version = "0.2.0"
+dependencies = [
+ "bzip2 0.6.1",
+ "puppetcat-host",
+ "puppetcat-media",
+ "serde",
+ "serde_json",
+ "sherpa-onnx",
+ "tar",
+ "ureq",
+ "whisper-rs",
+]
+
+[[package]]
+name = "puppetcat-text"
+version = "0.2.0"
+dependencies = [
+ "fontdb",
+ "rustybuzz",
+ "tiny-skia 0.12.0",
+ "ttf-parser",
+]
 
 [[package]]
 name = "pxfm"

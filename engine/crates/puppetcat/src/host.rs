@@ -105,6 +105,26 @@ impl Shell {
         SHELL.with(|slot| *slot.borrow_mut() = Some(shell));
     }
 
+    /// Drops the installed shell. Called once from `main`, right after the
+    /// event loop returns and before `main` itself does.
+    ///
+    /// `main` keeps its own `Rc<Shell>` alongside the clone this hands to
+    /// `SHELL`, so without this call the *last* strong reference is the one
+    /// sitting in `SHELL` - and that one is only dropped when the thread's
+    /// own thread-locals are torn down at process exit. That is too late:
+    /// the drop cascades through `Studio`, the engine, the monitor and its
+    /// GPU compositor, and a GPU buffer's drop reaches into wgpu-core's own
+    /// thread-local lock tracer, which - like every thread-local - can be
+    /// gone by the time a *different* one (`SHELL`) gets around to tearing
+    /// down, aborting the process with the same "thread local panicked on
+    /// drop" fate `Shell::with`'s `try_with` already exists to dodge. Clearing
+    /// `SHELL` here, before `main`'s own `shell` goes out of scope, forces
+    /// that whole cascade to run as an ordinary drop on `main`'s stack, while
+    /// the thread is still very much alive.
+    pub fn uninstall() {
+        SHELL.with(|slot| *slot.borrow_mut() = None);
+    }
+
     /// Runs `body` with the shell and a strong handle on the window, on the
     /// event-loop thread. Does nothing if the window is gone, the shell was
     /// never installed, or - closing the window can fire a Slint callback

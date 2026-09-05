@@ -1081,5 +1081,11 @@ fn main() -> Result<(), slint::PlatformError> {
         shell.studio.borrow().publish(&app, &shell.models);
     }
 
-    app.run()
+    let result = app.run();
+    // Drops SHELL's own strong reference here, on `main`'s stack, so the
+    // real teardown of `shell` (below, at the end of this scope) happens as
+    // an ordinary drop rather than from inside SHELL's own thread-local
+    // destructor - see `Shell::uninstall`.
+    Shell::uninstall();
+    result
 }

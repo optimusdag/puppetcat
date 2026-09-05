@@ -92,3 +92,15 @@ strip = "symbols"
 # the rest of the engine is being debugged.
 [profile.dev.package."*"]
 opt-level = 2
+
+# wgpu-core's own debug-assertion-gated lock-recursion tracer stores its state
+# in a thread-local and reads it back with a plain (panicking) access rather
+# than a `try_with` - harmless while the program runs, but the window's GPU
+# queue is torn down late enough (see puppetcat's `Shell::uninstall`) that on
+# some runs it is the *last* thread-local standing when the OS starts tearing
+# the main thread's down, and that plain access aborts the process. The
+# tracer is debug-only (`cfg(debug_assertions)` in wgpu-core), so turning off
+# debug assertions for just this one dependency removes it without giving up
+# assertions anywhere in our own code.
+[profile.dev.package.wgpu-core]
+debug-assertions = false

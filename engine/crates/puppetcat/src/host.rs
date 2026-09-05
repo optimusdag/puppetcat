@@ -106,10 +106,17 @@ impl Shell {
     }
 
     /// Runs `body` with the shell and a strong handle on the window, on the
-    /// event-loop thread. Does nothing if the window is gone or the shell
-    /// was never installed.
+    /// event-loop thread. Does nothing if the window is gone, the shell was
+    /// never installed, or - closing the window can fire a Slint callback
+    /// that reaches here one last time while `SHELL` itself is already being
+    /// torn down at process exit - the shell is mid-teardown: `try_with`
+    /// turns what would otherwise be a hard abort (accessing a thread local
+    /// during its own destruction is not just an error, it is fatal) into
+    /// the same "nothing to do" case as the other two.
     pub fn with(body: impl FnOnce(&Shell, App)) {
-        let shell = SHELL.with(|slot| slot.borrow().clone());
+        let Ok(shell) = SHELL.try_with(|slot| slot.borrow().clone()) else {
+            return;
+        };
         if let Some(shell) = shell
             && let Some(app) = shell.app.upgrade()
         {

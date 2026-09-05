@@ -294,7 +294,9 @@ impl ConcatAgentServer {
 
     // ── project lifecycle ──
 
-    #[tool(description = "Create a new project folder and open it as the active session.")]
+    #[tool(
+        description = "Create a new project folder and open it as the active session. Opening a project here blocks the PuppetCat window on it, if one has it open, until close_project is called - call close_project as soon as the current change or set of changes is done."
+    )]
     fn create_project(
         &self,
         Parameters(params): Parameters<CreateProjectParams>,
@@ -313,7 +315,7 @@ impl ConcatAgentServer {
     }
 
     #[tool(
-        description = "Open an existing project folder as the active session, replacing whatever was open. Unsaved edits in the previous session are lost - call save_project first if they matter."
+        description = "Open an existing project folder as the active session, replacing whatever was open. Unsaved edits in the previous session are lost - call save_project first if they matter. Opening a project here blocks the PuppetCat window on it, if one has it open, until close_project is called - call close_project as soon as the current change or set of changes is done."
     )]
     fn open_project(
         &self,
@@ -325,13 +327,17 @@ impl ConcatAgentServer {
             .and_then(|info| ok_json(&info))
     }
 
-    #[tool(description = "Save the active session, then close it.")]
+    #[tool(
+        description = "Save the active session, then close it - releasing the PuppetCat window (if it has this project open) to resume. Call this as soon as the current change or set of changes is done, not only once the whole task is finished; reopen the project later to continue."
+    )]
     fn close_project(&self) -> Result<CallToolResult, McpError> {
         self.engine.close_project().map_err(to_mcp_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text("closed")]))
     }
 
-    #[tool(description = "Save the active session in place, without closing it.")]
+    #[tool(
+        description = "Save the active session in place, without closing it. This does not release the project - the PuppetCat window, if it has this project open, stays blocked until close_project is called."
+    )]
     fn save_project(&self) -> Result<CallToolResult, McpError> {
         self.engine.save_project().map_err(to_mcp_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text("saved")]))
@@ -623,7 +629,14 @@ impl ServerHandler for ConcatAgentServer {
              project, edit its timeline through curated tools or the apply_raw_command \
              escape hatch (which covers every operation), render_snapshot to see the \
              result, and export. One project is open at a time; create_project or \
-             open_project must be called before any editing tool."
+             open_project must be called before any editing tool.\n\n\
+             Opening or creating a project here takes an exclusive claim on it: if the \
+             PuppetCat window has that same project open, it blocks all input there for \
+             as long as this session keeps the project open - not only while a command \
+             is actually running. Call close_project as soon as the current change or \
+             set of changes is done, even if the same project will be opened again soon, \
+             so the person at the window can resume; save_project alone does not release \
+             the claim, only close_project does."
                 .to_owned(),
         )
     }

@@ -213,8 +213,20 @@ pub fn mix_graph(clips: &[AudioClip], duration: f64) -> Result<String> {
     // at once, and the single-clip `anull` path.
     //
     // Do not "simplify" this away because the rate on both sides is MIX_RATE.
+    //
+    // `apad` bounds itself with `whole_dur`, rather than padding forever and
+    // trusting the trailing `atrim` to cut it off: unbounded, it only stops
+    // once something downstream stops asking, and that "something" is
+    // `atrim` timing out `duration` seconds by the very PTS series this
+    // comment already flags as fragile after a retiming filter. When that
+    // series does not advance the way `atrim` expects, `apad` keeps
+    // producing silence and nothing ever tells it to stop - the mix runs
+    // forever instead of failing or finishing. `whole_dur` is `apad`'s own
+    // stopping condition, independent of that PTS series; the trailing
+    // `atrim` stays only as a truncating safety net for the rarer case of
+    // the mix already overrunning `duration` before `apad` is reached.
     chains.push(format!(
-        "{mix};[mixed]aresample={MIX_RATE},apad,atrim=duration={duration:.6}[out]"
+        "{mix};[mixed]aresample={MIX_RATE},apad=whole_dur={duration:.6},atrim=duration={duration:.6}[out]"
     ));
 
     Ok(chains.join(";"))
@@ -281,7 +293,6 @@ impl MixInput {
 /// Every clip's file must contain an audio stream; see [`mix_graph`].
 pub fn mix_to_file(clips: &[AudioClip], duration: f64, destination: &Path) -> Result<()> {
     ffi::init();
-    let graph_spec = mix_graph(clips, duration)?;
     let missing = |name: &str| Error::Missing {
         what: "filter",
         name: name.to_owned(),
@@ -291,6 +302,9 @@ pub fn mix_to_file(clips: &[AudioClip], duration: f64, destination: &Path) -> Re
     // sources are described by what actually comes out of the decoders.
     let mut inputs: Vec<MixInput> = Vec::with_capacity(clips.len());
     let mut first_frames: Vec<Audio> = Vec::with_capacity(clips.len());
+    // What `mix_graph` actually gets asked to trim to - see the duration
+    // clamp below.
+    let mut trimmed_clips: Vec<AudioClip> = Vec::with_capacity(clips.len());
     let mut graph = filter::Graph::new();
     for (index, clip) in clips.iter().enumerate() {
         let path = clip.path.as_path();
@@ -304,6 +318,31 @@ pub fn mix_to_file(clips: &[AudioClip], duration: f64, destination: &Path) -> Re
             })?;
         let stream_index = stream.index();
         let time_base = stream.time_base();
+
+        // `atrim`'s own `duration` (in `mix_graph`) trusts the clip to ask
+        // for no more than the source really has. It routinely does not:
+        // a clip trimmed to the exact end of its video is a few tens of
+        // milliseconds past where that file's *audio* stream actually
+        // ends, since the two are rarely frame-identical in a real
+        // encode. `atrim` then closes its branch before the source runs
+        // dry, and every attempt this crate made to recover from that
+        // after the fact - accepting the resulting `Eof` and carrying on -
+        // hung the mix instead of ending it, deep inside libavfilter.
+        // Clamped here, before the graph exists, the mismatch never
+        // reaches `atrim` at all.
+        let mut trimmed = clip.clone();
+        if stream.duration() > 0 {
+            let real_seconds = stream.duration() as f64 * f64::from(time_base.numerator())
+                / f64::from(time_base.denominator());
+            let speed = clamp_speed(clip.speed);
+            let available_source_seconds = (real_seconds - clip.source_start).max(0.0);
+            let requested_source_seconds = clip.duration * speed;
+            if requested_source_seconds > available_source_seconds {
+                trimmed.duration = available_source_seconds / speed;
+            }
+        }
+        trimmed_clips.push(trimmed);
+
         let decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
             .and_then(|context| context.decoder().audio())
             .map_err(|error| ffi::fail("open decoder", path, error))?;
@@ -350,6 +389,7 @@ pub fn mix_to_file(clips: &[AudioClip], duration: f64, destination: &Path) -> Re
         )
         .map_err(|error| ffi::fail("buffer sink", destination, error))?;
 
+    let graph_spec = mix_graph(&trimmed_clips, duration)?;
     // The plan's `[out]` lands on the encoder's own format before the sink.
     let spec = format!(
         "{graph_spec};[out]aformat=sample_fmts=fltp:sample_rates={MIX_RATE}:channel_layouts=stereo[sink]"
@@ -440,14 +480,34 @@ pub fn mix_to_file(clips: &[AudioClip], duration: f64, destination: &Path) -> Re
     // Feed the sources round-robin and drain the sink after every push, so
     // no input runs ahead of the others by more than a frame: what a filter
     // has not consumed yet sits in memory.
-    for (index, first) in first_frames.into_iter().enumerate() {
-        let mut context = graph.get(&inputs[index].label).expect("source exists");
-        context
-            .source()
-            .add(&first)
-            .map_err(|error| ffi::fail("filter", &inputs[index].path, error))?;
-    }
     let mut live = inputs.len();
+    for (index, first) in first_frames.into_iter().enumerate() {
+        let pushed = {
+            let mut context = graph.get(&inputs[index].label).expect("source exists");
+            context.source().add(&first)
+        };
+        match pushed {
+            Ok(()) => {}
+            // This clip's own `atrim` (in `mix_graph`) can close its branch
+            // before even one frame's worth of overlap exists - the clip's
+            // in-point sits at or past where the source's real audio ends,
+            // a routine mismatch (e.g. a track trimmed to the very end of a
+            // file whose audio is a few tens of milliseconds shorter than
+            // its video) rather than a corrupt file. Contributes silence
+            // for its span instead of failing the whole mix, the same
+            // policy the video path already has for running past a
+            // source's end. Still flushed, same as every other way an
+            // input ends: libavfilter's sink otherwise never learns this
+            // branch is finished and `amix` waits on it forever.
+            Err(ffmpeg::Error::Eof) => {
+                let mut context = graph.get(&inputs[index].label).expect("source exists");
+                let _ = context.source().flush();
+                inputs[index].done = true;
+                live -= 1;
+            }
+            Err(error) => return Err(ffi::fail("filter", &inputs[index].path, error)),
+        }
+    }
     loop {
         // Pull everything the sink has.
         loop {
@@ -483,11 +543,24 @@ pub fn mix_to_file(clips: &[AudioClip], duration: f64, destination: &Path) -> Re
             }
             match input.next()? {
                 Some(frame) => {
-                    let mut context = graph.get(&input.label).expect("source exists");
-                    context
-                        .source()
-                        .add(&frame)
-                        .map_err(|error| ffi::fail("filter", &input.path, error))?;
+                    let pushed = {
+                        let mut context = graph.get(&input.label).expect("source exists");
+                        context.source().add(&frame)
+                    };
+                    match pushed {
+                        Ok(()) => {}
+                        // Same `atrim`-closes-before-the-source-runs-dry
+                        // case as the first frame above: stop asking this
+                        // input for more rather than failing the mix, and
+                        // flush it for the same reason.
+                        Err(ffmpeg::Error::Eof) => {
+                            let mut context = graph.get(&input.label).expect("source exists");
+                            let _ = context.source().flush();
+                            input.done = true;
+                            live -= 1;
+                        }
+                        Err(error) => return Err(ffi::fail("filter", &input.path, error)),
+                    }
                 }
                 None => {
                     let mut context = graph.get(&input.label).expect("source exists");
@@ -717,7 +790,7 @@ mod tests {
     fn the_final_stage_pads_and_trims_to_the_timeline_duration() {
         let graph = mix_graph(&[clip("a.mp4")], 4.5).expect("valid");
         assert!(
-            graph.ends_with("aresample=48000,apad,atrim=duration=4.500000[out]"),
+            graph.ends_with("aresample=48000,apad=whole_dur=4.500000,atrim=duration=4.500000[out]"),
             "graph was: {graph}"
         );
     }

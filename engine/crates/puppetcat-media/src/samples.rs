@@ -308,11 +308,30 @@ impl AudioDecoder {
                         self.graph = Some(self.build_graph(&frame)?);
                     }
                     let graph = self.graph.as_mut().expect("just built");
-                    let mut context = graph.get("in").expect("the graph has an input");
-                    context
-                        .source()
-                        .add(&frame)
-                        .map_err(|error| ffi::fail("filter", &self.path, error))?;
+                    let pushed = {
+                        let mut context = graph.get("in").expect("the graph has an input");
+                        context.source().add(&frame)
+                    };
+                    match pushed {
+                        Ok(()) => {}
+                        // `atrim`'s own `duration` can close the graph before
+                        // the source runs dry - a clip trimmed to (or past)
+                        // the exact end of a track whose audio is a few tens
+                        // of milliseconds shorter than its video, which is a
+                        // routine mismatch in real files, not a corrupt one.
+                        // Treated the same as running out of source frames:
+                        // let whatever the graph already produced drain on
+                        // the next pull, rather than failing the whole
+                        // export over the last fraction of a second. No
+                        // `flush()`: the branch already closed itself - that
+                        // is what this `Eof` means - and flushing an
+                        // already-closed source is what hung the mix this
+                        // was modelled on instead of ending it.
+                        Err(ffmpeg::Error::Eof) => {
+                            self.flushed = true;
+                        }
+                        Err(error) => return Err(ffi::fail("filter", &self.path, error)),
+                    }
                 }
                 None => {
                     let Some(graph) = self.graph.as_mut() else {

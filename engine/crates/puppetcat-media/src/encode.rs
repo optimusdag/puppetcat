@@ -122,6 +122,17 @@ impl Encoder {
         video.set_format(pixel_format);
         video.set_time_base(time_base);
         video.set_frame_rate(Some(rate));
+        // Left unset, libx264 falls back to a 250-frame max GOP - about
+        // 8 seconds at this project's own rates, and often more once a
+        // static-looking source (a screen recording is the routine case)
+        // lets x264's scene-cut detection skip keyframes for far longer
+        // than that between actual cuts. Scrubbing a player has to decode
+        // forward from the nearest keyframe to reach the dragged-to frame;
+        // QuickTime's scrubber redoes that seek continuously while the
+        // pointer moves; a keyframe every couple of seconds is what makes
+        // that keep up rather than freeze on the last frame it managed
+        // while the audio - which has no such dependency - keeps playing.
+        video.set_gop((fps.numerator() * 2 / fps.denominator()).max(1) as u32);
         if global_header {
             video.set_flags(ffmpeg::codec::Flags::GLOBAL_HEADER);
         }

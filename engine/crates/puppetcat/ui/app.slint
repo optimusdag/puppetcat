@@ -159,6 +159,8 @@ export component App inherits Window {
     callback settings-page-changed(index: int);
     callback settings-language-changed(index: int);
     callback settings-theme-changed(dark: bool);
+    callback settings-temp-export-folder-edited(path: string);
+    callback settings-temp-export-folder-browse();
     callback settings-transcribe-language-changed(index: int);
     callback model-activated(id: string);
     callback model-download(id: string);
@@ -340,6 +342,8 @@ export component App inherits Window {
         page-changed(index) => { root.settings-page-changed(index); }
         language-changed(index) => { root.settings-language-changed(index); }
         theme-changed(dark) => { root.settings-theme-changed(dark); }
+        temp-export-folder-edited(path) => { root.settings-temp-export-folder-edited(path); }
+        temp-export-folder-browse => { root.settings-temp-export-folder-browse(); }
         transcribe-language-changed(index) => {
             root.settings-transcribe-language-changed(index);
         }

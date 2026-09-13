@@ -12,8 +12,8 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    AnimationSlot, AppliedFilter, Clip, ClipAnimation, ClipKind, Crop, CustomFont, MediaItem,
-    MediaKind, Project, SpeedPoint, TextStyle, Timeline, Track, Transition,
+    AnimationSlot, AppliedFilter, Clip, ClipAnimation, ClipKind, Crop, CustomFont, Marker,
+    MediaItem, MediaKind, Project, SpeedPoint, TextStyle, Timeline, Track, Transition,
 };
 
 /// Fallback length for media whose container reports no duration.
@@ -414,6 +414,36 @@ pub enum Command {
         /// The new setting.
         value: bool,
     },
+    /// Drops a named pin on the active timeline, minting an "mk" id - the
+    /// address an agent gives a moment instead of its timestamp.
+    AddMarker {
+        /// Seconds from the start of the timeline, floored at 0.
+        time: f64,
+        /// Label; "Marker N" after the highest already in use when absent
+        /// or blank.
+        name: Option<String>,
+    },
+    /// Deletes a marker from the active timeline. An unknown id is a no-op.
+    RemoveMarker {
+        /// The marker to delete.
+        marker_id: String,
+    },
+    /// Renames a marker, with the same trim-and-ignore-blank rule as
+    /// [`Command::RenameTrack`].
+    RenameMarker {
+        /// The marker to rename.
+        marker_id: String,
+        /// The new label; trimmed before it lands.
+        name: String,
+    },
+    /// Repositions a marker on the active timeline. An unknown id is a
+    /// no-op.
+    MoveMarker {
+        /// The marker to move.
+        marker_id: String,
+        /// New time in seconds, floored at 0.
+        time: f64,
+    },
     /// Adds a fresh timeline - four new lanes, "Timeline N" after the
     /// highest in use - and makes it active. Mints a "tl" id.
     AddTimeline,
@@ -560,6 +590,9 @@ impl IdMint {
             }
             for clip in &timeline.clips {
                 self.adopt(&clip.id);
+            }
+            for marker in &timeline.markers {
+                self.adopt(&marker.id);
             }
         }
     }
@@ -1524,6 +1557,68 @@ pub fn apply(
             })
         }
 
+        Command::AddMarker { time, name } => {
+            let timeline = project.active_mut();
+            let id = mint.next("mk");
+            let name = name
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| {
+                    next_numbered(
+                        "Marker",
+                        timeline.markers.iter().map(|marker| marker.name.clone()),
+                    )
+                });
+            timeline.markers.push(Marker {
+                id: id.clone(),
+                name,
+                time: time.max(0.0),
+            });
+            Ok(Outcome {
+                created_id: Some(id),
+                applied: true,
+            })
+        }
+
+        Command::RemoveMarker { marker_id } => {
+            let timeline = project.active_mut();
+            let count = timeline.markers.len();
+            timeline.markers.retain(|marker| marker.id != marker_id);
+            Ok(Outcome {
+                created_id: None,
+                applied: timeline.markers.len() != count,
+            })
+        }
+
+        Command::RenameMarker { marker_id, name } => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return Ok(Outcome::default());
+            }
+            let timeline = project.active_mut();
+            let applied = timeline
+                .markers
+                .iter_mut()
+                .find(|marker| marker.id == marker_id)
+                .is_some_and(|marker| assign(&mut marker.name, trimmed.to_owned()));
+            Ok(Outcome {
+                created_id: None,
+                applied,
+            })
+        }
+
+        Command::MoveMarker { marker_id, time } => {
+            let timeline = project.active_mut();
+            let Some(marker) = timeline.marker_mut(&marker_id) else {
+                return Ok(Outcome::default());
+            };
+            let applied = assign(&mut marker.time, time.max(0.0));
+            Ok(Outcome {
+                created_id: None,
+                applied,
+            })
+        }
+
         Command::AddTimeline => {
             let id = mint.next("tl");
             let name = next_numbered(
@@ -1546,6 +1641,7 @@ pub fn apply(
                 name,
                 tracks,
                 clips: Vec::new(),
+                markers: Vec::new(),
             });
             project.active_timeline_id = id.clone();
             Ok(Outcome {

@@ -9,7 +9,7 @@ import { ContextMenu, MenuItemData } from "../primitives/context-menu.slint";
 import { HairlineSplitter } from "splitter.slint";
 import { ThinScrollbar } from "../primitives/scrollbar.slint";
 import {
-    ClipData, DropData, TimelineTabData, TimelineTool, TrackData, TrackSize,
+    ClipData, DropData, MarkerData, TimelineTabData, TimelineTool, TrackData, TrackSize,
 } from "../timeline/model.slint";
 import { TimelineTabs } from "../timeline/tabs.slint";
 import { TimelineTray } from "../timeline/tray.slint";
@@ -63,12 +63,14 @@ export component TimelinePane inherits Rectangle {
     }
     callback av-selected(id: string);
     callback add-track();
+    callback add-marker();
     callback zoom-to-fit(width: length);
     callback zoom(factor: float, anchor-seconds: float);
 
     // ── the grid ─────────────────────────────────────────────────────────
     in property <[TrackData]> tracks;
     in property <[ClipData]> clips;
+    in property <[MarkerData]> markers;
     in property <float> playhead;
     in property <float> frame-rate: 30;
     in property <float> scroll-left;
@@ -85,6 +87,18 @@ export component TimelinePane inherits Rectangle {
     in property <int> menu-token;
     callback clip-context(id: string);
     callback menu-selected(id: string);
+
+    callback marker-pressed(id: string);
+    callback marker-dragged(id: string, seconds: float);
+    callback marker-released();
+    callback marker-renamed(id: string, name: string);
+    callback marker-add-requested(seconds: float);
+    in property <[MenuItemData]> marker-menu-items;
+    in property <length> marker-menu-height;
+    in property <int> marker-menu-token;
+    in property <string> renaming-marker-id: "";
+    callback marker-context(id: string);
+    callback marker-menu-selected(id: string);
 
     callback band-selected(from-seconds: float, to-seconds: float,
         from-y: length, to-y: length, additive: bool);
@@ -205,6 +219,7 @@ export component TimelinePane inherits Rectangle {
                 root.av-tools();
             }
             add-track => { root.add-track(); }
+            add-marker => { root.add-marker(); }
             fit => { root.zoom-to-fit(lanes.width); }
             // No anchor from a button: a wheel zooms about the pointer and a
             // press zooms about the view, since a press has no pointer to
@@ -278,6 +293,7 @@ export component TimelinePane inherits Rectangle {
 
                 tracks: root.tracks;
                 clips: root.clips;
+                markers: root.markers;
                 tool: root.tool;
                 playhead: root.playhead;
                 frame-rate: root.frame-rate;
@@ -296,6 +312,19 @@ export component TimelinePane inherits Rectangle {
                 menu-token: root.menu-token;
                 clip-context(id) => { root.clip-context(id); }
                 menu-selected(id) => { root.menu-selected(id); }
+
+                marker-menu-items: root.marker-menu-items;
+                marker-menu-height: root.marker-menu-height;
+                marker-menu-token: root.marker-menu-token;
+                renaming-marker-id: root.renaming-marker-id;
+                marker-pressed(id) => { root.marker-pressed(id); }
+                marker-dragged(id, seconds) => { root.marker-dragged(id, seconds); }
+                marker-released => { root.marker-released(); }
+                marker-renamed(id, name) => { root.marker-renamed(id, name); }
+                marker-add-requested(seconds) => { root.marker-add-requested(seconds); }
+                marker-context(id) => { root.marker-context(id); }
+                marker-menu-selected(id) => { root.marker-menu-selected(id); }
+
                 band-selected(a, b, c, d, additive) => {
                     root.band-selected(a, b, c, d, additive);
                 }

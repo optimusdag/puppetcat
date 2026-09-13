@@ -220,6 +220,7 @@ impl AgentEngine {
             .collect();
         let spec = puppetcat_host::export::ExportSpec {
             output: output.to_owned(),
+            scratch_dir: puppetcat_host::export::temp_folder_preference(&self.dirs),
             crf,
             preset: preset.to_owned(),
         };

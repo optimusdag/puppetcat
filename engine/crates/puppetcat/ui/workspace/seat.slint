@@ -255,6 +255,7 @@ export component Seat inherits Rectangle {
             current-tab: Editor.timeline-current-tab;
             tracks: Editor.tracks;
             clips: Editor.clips;
+            markers: Editor.markers;
             tool: Editor.tool;
             snap: Editor.snap;
             selected-count: Editor.selected-count;
@@ -280,6 +281,7 @@ export component Seat inherits Rectangle {
             av-token: Editor.av-token;
             av-selected(id) => { Editor.av-selected(id); }
             add-track => { Editor.add-track(); }
+            add-marker => { Editor.add-marker(); }
             zoom-to-fit(width) => { Editor.zoom-to-fit(width); }
             zoom(factor, anchor) => { Editor.zoom(factor, anchor); }
             scrubbed(seconds) => { Editor.scrubbed(seconds); }
@@ -292,6 +294,17 @@ export component Seat inherits Rectangle {
             menu-token: Editor.menu-token;
             clip-context(id) => { Editor.clip-context(id); }
             menu-selected(id) => { Editor.menu-selected(id); }
+            marker-menu-items: Editor.marker-menu-items;
+            marker-menu-height: Editor.marker-menu-height;
+            marker-menu-token: Editor.marker-menu-token;
+            renaming-marker-id: Editor.renaming-marker-id;
+            marker-pressed(id) => { Editor.marker-pressed(id); }
+            marker-dragged(id, seconds) => { Editor.marker-dragged(id, seconds); }
+            marker-released => { Editor.marker-released(); }
+            marker-renamed(id, name) => { Editor.marker-renamed(id, name); }
+            marker-add-requested(seconds) => { Editor.marker-add-requested(seconds); }
+            marker-context(id) => { Editor.marker-context(id); }
+            marker-menu-selected(id) => { Editor.marker-menu-selected(id); }
             band-selected(a, b, c, d, additive) => { Editor.band-selected(a, b, c, d, additive); }
             scrolled(seconds) => { Editor.scrolled(seconds); }
             drop: Editor.drop;

@@ -10,7 +10,7 @@ import { DockDivider, DockSide, SeatBox } from "dock.slint";
 import { PaneKind } from "workspace/pane-switcher.slint";
 import { MenuItemData } from "primitives/context-menu.slint";
 import {
-    ClipData, ClipField, ClipTextField, DropData, SelectedClipData,
+    ClipData, ClipField, ClipTextField, DropData, MarkerData, SelectedClipData,
     StageGuideData, StageItemData, TimelineTabData, TimelineTool, TrackData,
     TrackSize,
 } from "timeline/model.slint";
@@ -182,6 +182,7 @@ export global Editor {
     in-out property <int> timeline-current-tab;
     in-out property <[TrackData]> tracks;
     in-out property <[ClipData]> clips;
+    in-out property <[MarkerData]> markers;
     in-out property <TimelineTool> tool;
     in-out property <bool> snap;
     in-out property <int> selected-count;
@@ -207,6 +208,7 @@ export global Editor {
     in-out property <int> av-token;
     callback av-selected(id: string);
     callback add-track();
+    callback add-marker();
     callback zoom-to-fit(width: length);
     callback zoom(factor: float, anchor-seconds: float);
     callback scrubbed(seconds: float);
@@ -219,6 +221,18 @@ export global Editor {
     in-out property <int> menu-token;
     callback clip-context(id: string);
     callback menu-selected(id: string);
+
+    callback marker-pressed(id: string);
+    callback marker-dragged(id: string, seconds: float);
+    callback marker-released();
+    callback marker-renamed(id: string, name: string);
+    callback marker-add-requested(seconds: float);
+    in-out property <[MenuItemData]> marker-menu-items;
+    in-out property <length> marker-menu-height;
+    in-out property <int> marker-menu-token;
+    in-out property <string> renaming-marker-id;
+    callback marker-context(id: string);
+    callback marker-menu-selected(id: string);
 
     callback band-selected(from-seconds: float, to-seconds: float,
         from-y: length, to-y: length, additive: bool);

@@ -81,6 +81,14 @@ impl Session {
                     settings.width = width as u32;
                     settings.height = height as u32;
                 }
+                if let Some(folder) = document
+                    .get("export")
+                    .and_then(|export| export.get("folder"))
+                    .and_then(|value| value.as_str())
+                    .filter(|folder| !folder.is_empty())
+                {
+                    settings.export_folder = Some(folder.to_owned());
+                }
                 match Editor::from_document(&document) {
                     Some(editor) => editor,
                     // The settings-only manifest `create` writes: a project
@@ -112,6 +120,7 @@ impl Session {
                 height: info.height,
                 rate_num: info.rate_num,
                 rate_den: info.rate_den,
+                export_folder: None,
             },
         )
     }
@@ -119,6 +128,13 @@ impl Session {
     /// The project folder.
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    /// Remembers where this project's exports go, so the next one starts
+    /// here instead of back at the project root. Takes effect on disk at
+    /// the next save.
+    pub fn set_export_folder(&mut self, folder: String) {
+        self.settings.export_folder = Some(folder);
     }
 
     /// The session's settings.
@@ -246,6 +262,7 @@ mod tests {
             height: 1080,
             rate_num: 30,
             rate_den: 1,
+            export_folder: None,
         }
     }
 
@@ -279,6 +296,31 @@ mod tests {
         assert_eq!(
             reopened.project().active().tracks.len(),
             session.project().active().tracks.len()
+        );
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn a_new_project_defaults_to_no_export_folder_and_remembers_one_once_set() {
+        let scratch = std::env::temp_dir()
+            .join(format!("puppetcat-session-export-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).expect("scratch dir");
+        let info = projects::create(&scratch.to_string_lossy(), "Fresh", 1920, 1080, 30, 1)
+            .expect("creates");
+
+        let mut session = Session::open_info(&info).expect("opens the settings-only manifest");
+        assert_eq!(session.settings().export_folder, None);
+
+        session.set_export_folder("/exports/here".to_owned());
+        session.save(None, None, None).expect("saves");
+
+        let reopened = Session::open_info(&info).expect("reopens");
+        assert_eq!(
+            reopened.settings().export_folder.as_deref(),
+            Some("/exports/here"),
+            "a chosen export folder survives a reopen"
         );
 
         let _ = std::fs::remove_dir_all(&scratch);

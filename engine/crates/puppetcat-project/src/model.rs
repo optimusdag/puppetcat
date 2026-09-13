@@ -398,8 +398,23 @@ pub struct Clip {
     pub text: Option<TextStyle>,
 }
 
-/// One timeline: a name and its lanes and clips. Every operation takes the
-/// project and works on whichever timeline is active.
+/// A named instant on a timeline: a pin an agent (or a person) can address
+/// by id later, without knowing or re-finding its timestamp.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Marker {
+    /// Minted by the editor ("mk1", "mk2", ...).
+    pub id: String,
+    /// Display label. The UI shows the first four characters on the pin
+    /// itself and the rest on hover; the full string is what an agent
+    /// matches against, so it is never truncated in storage.
+    pub name: String,
+    /// Seconds from the start of the timeline.
+    pub time: f64,
+}
+
+/// One timeline: a name and its lanes, clips and markers. Every operation
+/// takes the project and works on whichever timeline is active.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Timeline {
@@ -413,6 +428,10 @@ pub struct Timeline {
     /// Every clip on this timeline, in insertion order, not time order -
     /// readers must sort by `start` where order matters.
     pub clips: Vec<Clip>,
+    /// Named instants on this timeline, in insertion order. Absent from
+    /// documents saved before markers existed, which is why it defaults.
+    #[serde(default)]
+    pub markers: Vec<Marker>,
 }
 
 /// A font the user added from disk.
@@ -462,6 +481,7 @@ impl Project {
                     })
                     .collect(),
                 clips: Vec::new(),
+                markers: Vec::new(),
             }],
             active_timeline_id: "TL1".to_owned(),
         }
@@ -515,6 +535,18 @@ impl Timeline {
     /// The track with this id, or None if it was removed.
     pub fn track(&self, track_id: &str) -> Option<&Track> {
         self.tracks.iter().find(|track| track.id == track_id)
+    }
+
+    /// The marker with this id, or None if it was removed.
+    pub fn marker(&self, marker_id: &str) -> Option<&Marker> {
+        self.markers.iter().find(|marker| marker.id == marker_id)
+    }
+
+    /// Mutable twin of [`Timeline::marker`].
+    pub fn marker_mut(&mut self, marker_id: &str) -> Option<&mut Marker> {
+        self.markers
+            .iter_mut()
+            .find(|marker| marker.id == marker_id)
     }
 
     /// Where the last clip ends. Zero for an empty timeline.

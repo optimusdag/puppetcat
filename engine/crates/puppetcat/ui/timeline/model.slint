@@ -119,6 +119,19 @@ export struct ClipData {
 }
 
 
+/// A named instant on the timeline: a pin an agent — or a person — can
+/// address by id later, without knowing or re-finding its timestamp.
+export struct MarkerData {
+    id: string,
+    /// The full label - what the tooltip shows, and what a rename box edits.
+    name: string,
+    /// The first four characters of `name`, resolved by Rust: not something
+    /// worth a substring dialect in the expression language for one caller.
+    label: string,
+    /// seconds from the start of the timeline
+    time: float,
+}
+
 /// What a drag from the library will leave on the timeline if it is released
 /// where the pointer is now.
 ///

@@ -129,6 +129,7 @@ impl Titles {
                     video_filter_chain: video_effect_chain(&clip.video_effects),
                     transition: None,
                     video_fade_in: 0.0,
+                    video_fade_out: 0.0,
                     media_width: Some(width),
                     media_height: Some(height),
                     has_audio: Some(false),

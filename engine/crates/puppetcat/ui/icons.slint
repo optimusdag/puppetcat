@@ -83,6 +83,7 @@ export enum Glyph {
     split,
     merge,
     trash,
+    flag,
     magnet,
     waveform,
     eye-off,
@@ -450,6 +451,12 @@ export component Icon inherits Rectangle {
     if root.glyph == Glyph.waveform: Stroked {
         size: root.size; tint: root.tint; weight: root.weight;
         commands: "M2 10v3 M6 6v11 M10 3v18 M14 8v7 M18 5v13 M22 10v3";
+    }
+
+    // lucide/flag
+    if root.glyph == Glyph.flag: Stroked {
+        size: root.size; tint: root.tint; weight: root.weight;
+        commands: "M4 22V4 M4 15s1-1 4-1 5 2 8 2V3s-1 1-4 1-5-2-8-2Z";
     }
 
     // lucide/type

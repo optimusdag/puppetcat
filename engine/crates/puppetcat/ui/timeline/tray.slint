@@ -51,6 +51,9 @@ export component TimelineTray inherits Rectangle {
     callback delete-selected();
     callback av-tools(at-x: length);
     callback add-track();
+    /// Drops a marker at the playhead - the toolbar twin of double-clicking
+    /// the ruler, for a control that reads as a command rather than a trick.
+    callback add-marker();
     callback fit();
     callback zoom(factor: float);
 
@@ -165,6 +168,12 @@ export component TimelineTray inherits Rectangle {
             label: "Add track";
             icon-size: 14px;
             clicked => { root.add-track(); }
+        }
+        IconButton {
+            glyph: Glyph.flag;
+            label: "Add marker at playhead (M)";
+            icon-size: 14px;
+            clicked => { root.add-marker(); }
         }
 
         Rectangle { horizontal-stretch: 1; }

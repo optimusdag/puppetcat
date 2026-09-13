@@ -225,6 +225,45 @@ pub struct SetTrackFlagParams {
     pub value: bool,
 }
 
+/// Parameters for `add_marker`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AddMarkerParams {
+    /// Seconds from the start of the active timeline, floored at 0.
+    pub time: f64,
+    /// Label. Omit for "Marker N" after the highest already in use.
+    pub name: Option<String>,
+}
+
+/// Parameters for `rename_marker`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameMarkerParams {
+    /// The marker to rename - an id from `get_state`'s active timeline, or
+    /// the id `add_marker` just created.
+    pub marker_id: String,
+    /// The new label; trimmed before it lands. Whitespace-only is ignored.
+    pub name: String,
+}
+
+/// Parameters for `move_marker`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveMarkerParams {
+    /// The marker to move.
+    pub marker_id: String,
+    /// New time in seconds, floored at 0.
+    pub time: f64,
+}
+
+/// Parameters for `remove_marker`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveMarkerParams {
+    /// The marker to delete. An unknown id is ignored.
+    pub marker_id: String,
+}
+
 /// Parameters for `apply_raw_command`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -538,6 +577,55 @@ impl ConcatAgentServer {
             track_id: params.track_id,
             flag,
             value: params.value,
+        }))
+    }
+
+    // ── markers ──
+
+    #[tool(
+        description = "Drop a named marker on the active timeline at a given time - an address an agent (or the returned state) can use for that moment instead of a timestamp. Returns the resulting state; the new marker's id is `createdId`."
+    )]
+    fn add_marker(
+        &self,
+        Parameters(params): Parameters<AddMarkerParams>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_state(self.engine.apply(Command::AddMarker {
+            time: params.time,
+            name: params.name,
+        }))
+    }
+
+    #[tool(
+        description = "Rename a marker. Whitespace-only names are ignored so a marker can never end up blank."
+    )]
+    fn rename_marker(
+        &self,
+        Parameters(params): Parameters<RenameMarkerParams>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_state(self.engine.apply(Command::RenameMarker {
+            marker_id: params.marker_id,
+            name: params.name,
+        }))
+    }
+
+    #[tool(description = "Move a marker to a new time on the active timeline, floored at 0.")]
+    fn move_marker(
+        &self,
+        Parameters(params): Parameters<MoveMarkerParams>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_state(self.engine.apply(Command::MoveMarker {
+            marker_id: params.marker_id,
+            time: params.time,
+        }))
+    }
+
+    #[tool(description = "Delete a marker from the active timeline. An unknown id is ignored.")]
+    fn remove_marker(
+        &self,
+        Parameters(params): Parameters<RemoveMarkerParams>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_state(self.engine.apply(Command::RemoveMarker {
+            marker_id: params.marker_id,
         }))
     }
 

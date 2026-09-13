@@ -67,6 +67,7 @@ mod tests {
             height: 1080,
             rate_num: 30,
             rate_den: 1,
+            export_folder: None,
         }
     }
 
@@ -392,10 +393,78 @@ mod tests {
             })
             .expect("updates");
         editor.apply(Command::AddTimeline).expect("adds");
+        editor
+            .apply(Command::AddMarker {
+                time: 2.5,
+                name: Some("Beat".to_owned()),
+            })
+            .expect("adds");
 
         let document = editor.to_document(&settings());
         let restored = Editor::from_document(&document).expect("loads");
         assert_eq!(restored.project(), editor.project());
+    }
+
+    #[test]
+    fn markers_are_added_addressed_moved_and_removed() {
+        let mut editor = Editor::new();
+        let id = editor
+            .apply(Command::AddMarker {
+                time: 4.0,
+                name: None,
+            })
+            .expect("adds")
+            .created_id
+            .expect("id");
+        assert_eq!(
+            editor.project().active().marker(&id).unwrap().name,
+            "Marker 1"
+        );
+
+        editor
+            .apply(Command::RenameMarker {
+                marker_id: id.clone(),
+                name: "  Chorus  ".to_owned(),
+            })
+            .expect("renames");
+        assert_eq!(
+            editor.project().active().marker(&id).unwrap().name,
+            "Chorus"
+        );
+
+        // A blank rename is ignored, not a crash into an empty label.
+        let outcome = editor
+            .apply(Command::RenameMarker {
+                marker_id: id.clone(),
+                name: "   ".to_owned(),
+            })
+            .expect("no-op");
+        assert!(!outcome.applied);
+        assert_eq!(
+            editor.project().active().marker(&id).unwrap().name,
+            "Chorus"
+        );
+
+        editor
+            .apply(Command::MoveMarker {
+                marker_id: id.clone(),
+                time: -3.0,
+            })
+            .expect("moves");
+        assert_eq!(editor.project().active().marker(&id).unwrap().time, 0.0);
+
+        editor
+            .apply(Command::RemoveMarker {
+                marker_id: id.clone(),
+            })
+            .expect("removes");
+        assert!(editor.project().active().marker(&id).is_none());
+
+        // Unknown ids are tolerated no-ops throughout.
+        let outcome = editor
+            .apply(Command::RemoveMarker { marker_id: id })
+            .expect("no-op");
+        assert!(!outcome.applied);
     }
 
     #[test]

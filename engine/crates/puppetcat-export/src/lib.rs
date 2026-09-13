@@ -165,6 +165,10 @@ pub struct ExportClip {
     /// transition resolution below, never by the UI directly.
     #[serde(default)]
     pub video_fade_in: f64,
+    /// Video opacity ramp down into the clip's end, in seconds. Same source
+    /// as `video_fade_in`.
+    #[serde(default)]
+    pub video_fade_out: f64,
     /// The source's pixel width, when the UI knows it. What makes an
     /// aspect-correct decode possible - absent, the frame is filled edge to
     /// edge the way it always was.
@@ -220,8 +224,16 @@ fn unity() -> f64 {
 #[serde(rename_all = "camelCase")]
 pub struct ExportRequest {
     /// The file to write. Siblings named `.{stem}.concat-*` are used as
-    /// scratch during the render and removed afterwards.
+    /// scratch during the render and removed afterwards - unless
+    /// `scratch_dir` names somewhere else, in which case the render happens
+    /// entirely there and only the finished file crosses to `output`.
     pub output: String,
+    /// Where to render before moving the finished file to `output`. `None`
+    /// renders in place, the old behaviour. Set this to somewhere fast and
+    /// local when `output` is slow or unreliable for a render's worth of
+    /// sustained writing.
+    #[serde(default)]
+    pub scratch_dir: Option<String>,
     /// Output frame width in pixels.
     pub width: u32,
     /// Output frame height in pixels.
@@ -363,42 +375,28 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
                     // than arriving at full level a dissolve early.
                     b.fade_in = b.fade_in.max(d);
                     b.track = a_track + 1;
-                } else if bake_fades {
+                } else {
                     // No handle to borrow without surfacing the cut: dip
                     // through black instead, using only footage each clip
-                    // already shows - the outgoing clip's real tail fading
-                    // out, the incoming clip's real head fading in. Frame-
-                    // based for the same reason fade-black is: the decoder
-                    // emits exactly one frame per output frame.
+                    // already shows - the outgoing clip's real tail opacity-
+                    // ramping out, the incoming clip's real head ramping in.
+                    // An opacity ramp, not a baked filter, so the paused
+                    // monitor and the live scrub see the same dissolve the
+                    // export does - nothing here needs FFmpeg to be running.
                     let half =
                         cut.duration.min(a_duration).min(clips[cut.incoming].duration) / 2.0;
-                    if half < frame / 2.0 {
+                    if half < frame {
                         continue;
                     }
                     {
                         let a = &mut clips[cut.outgoing];
-                        let frames = ((half.min(a.duration) * fps).round() as i64).max(1);
-                        let total = (a.duration * fps).round() as i64;
-                        append_filter(
-                            &mut a.transition_chain,
-                            &format!(
-                                "fade=t=out:start_frame={}:nb_frames={frames}",
-                                (total - frames).max(0)
-                            ),
-                        );
+                        a.video_fade_out = half.min(a.duration);
                     }
                     {
                         let b = &mut clips[cut.incoming];
-                        let frames = ((half.min(b.duration) * fps).round() as i64).max(1);
-                        append_filter(
-                            &mut b.transition_chain,
-                            &format!("fade=t=in:start_frame=0:nb_frames={frames}"),
-                        );
+                        b.video_fade_in = half.min(b.duration);
                     }
                 }
-                // Neither safe to blend nor baking fades (a live preview):
-                // render the cut plainly rather than reach past either
-                // clip's trim.
             }
             "fade-black" | "fade-white" if bake_fades => {
                 // Half the duration on each side of the cut, as fade filters
@@ -509,13 +507,34 @@ pub fn render(request: &ExportRequest, mut reporter: Reporter<'_>) -> Result<Str
     }
 
     // Render into siblings of the output so the move at the end stays on one
-    // filesystem, then clean up whatever we made.
+    // filesystem, then clean up whatever we made - unless `scratch_dir`
+    // names somewhere else, in which case everything below renders there
+    // instead, and only the finished file crosses to `output`, as a final
+    // explicit step.
     let stem = output
         .file_stem()
         .map_or_else(|| "puppetcat".into(), |s| s.to_string_lossy());
-    let directory = output.parent().unwrap_or(Path::new("."));
+    let scratching = request.scratch_dir.is_some();
+    let directory: PathBuf = match &request.scratch_dir {
+        Some(dir) => {
+            let dir = PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).map_err(|error| {
+                format!("could not create the scratch folder {}: {error}", dir.display())
+            })?;
+            dir
+        }
+        None => output.parent().unwrap_or(Path::new(".")).to_path_buf(),
+    };
     let silent = directory.join(format!(".{stem}.puppetcat-video.mp4"));
     let mixed = directory.join(format!(".{stem}.puppetcat-audio.m4a"));
+    // Where the finished render lands before crossing to `output` - `output`
+    // itself when there is no separate scratch folder, so that case does
+    // exactly what it always did: one write, no extra move.
+    let render_target = if scratching {
+        directory.join(format!(".{stem}.puppetcat-final.mp4"))
+    } else {
+        output.clone()
+    };
 
     let result = (|| -> Result<(), String> {
         render_picture(
@@ -528,25 +547,81 @@ pub fn render(request: &ExportRequest, mut reporter: Reporter<'_>) -> Result<Str
         )?;
 
         if sound.is_empty() {
-            std::fs::rename(&silent, &output)
-                .map_err(|error| format!("could not write {}: {error}", output.display()))?;
-            return Ok(());
+            std::fs::rename(&silent, &render_target).map_err(|error| {
+                format!("could not write {}: {error}", render_target.display())
+            })?;
+        } else {
+            reporter.cancelled()?;
+            reporter.emit(0, total_frames, "mixing audio");
+            let mix: Vec<AudioClip> = sound.iter().flat_map(|clip| audio_pieces(clip)).collect();
+            audio::mix_to_file(&mix, timeline_end, &mixed).map_err(|error| error.to_string())?;
+            verify_mixed_duration(&mixed, timeline_end)?;
+
+            reporter.cancelled()?;
+            reporter.emit(total_frames, total_frames, "muxing");
+            audio::mux(&silent, &mixed, &render_target).map_err(|error| error.to_string())?;
         }
 
-        reporter.cancelled()?;
-        reporter.emit(0, total_frames, "mixing audio");
-        let mix: Vec<AudioClip> = sound.iter().flat_map(|clip| audio_pieces(clip)).collect();
-        audio::mix_to_file(&mix, timeline_end, &mixed).map_err(|error| error.to_string())?;
-
-        reporter.cancelled()?;
-        reporter.emit(total_frames, total_frames, "muxing");
-        audio::mux(&silent, &mixed, &output).map_err(|error| error.to_string())
+        if scratching {
+            reporter.cancelled()?;
+            reporter.emit(total_frames, total_frames, "moving to destination");
+            move_finished_file(&render_target, &output)?;
+        }
+        Ok(())
     })();
 
     let _ = std::fs::remove_file(&silent);
     let _ = std::fs::remove_file(&mixed);
+    if scratching {
+        // Left behind only if the move above failed - a successful move has
+        // already taken it to `output`, so there is nothing here to clean.
+        let _ = std::fs::remove_file(&render_target);
+    }
 
     result.map(|()| output.to_string_lossy().into_owned())
+}
+
+/// Moves a finished render from the scratch folder to where the user
+/// actually asked for it. A plain rename first, since that is instant when
+/// scratch and destination share a filesystem; falling back to copying the
+/// whole file and then deleting the original is what makes a scratch folder
+/// on a *different* volume than the destination work at all - `rename(2)`
+/// refuses that outright (`EXDEV`) rather than doing the copy itself.
+fn move_finished_file(from: &Path, to: &Path) -> Result<(), String> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(from, to)
+        .map_err(|error| format!("could not write {}: {error}", to.display()))?;
+    std::fs::remove_file(from).map_err(|error| {
+        format!(
+            "wrote {} but could not remove the scratch copy at {}: {error}",
+            to.display(),
+            from.display()
+        )
+    })
+}
+
+/// The mixed-audio file's own filter graph pads and trims itself to exactly
+/// `timeline_end` (see `apad=whole_dur` in `mix_graph`), so a shorter result
+/// here means the encode was physically cut off after the graph already
+/// decided to produce the full length - almost always a write failure (a
+/// full disk, most often) that the encoder or muxer didn't surface as an
+/// error. This has shipped silently before: catch it here rather than hand
+/// back a file whose sound quietly stops partway through.
+fn verify_mixed_duration(mixed: &Path, timeline_end: f64) -> Result<(), String> {
+    let mixed_seconds = puppetcat_media::probe(mixed)
+        .ok()
+        .and_then(|info| info.duration)
+        .map_or(0.0, |duration| duration.as_f64());
+    if mixed_seconds + 1.0 < timeline_end {
+        return Err(format!(
+            "the mixed audio came out to {mixed_seconds:.1}s but the timeline is \
+             {timeline_end:.1}s long - the encode was likely cut short by a write \
+             failure (check available disk space) rather than finishing cleanly"
+        ));
+    }
+    Ok(())
 }
 
 /// The engine's view of one audible clip - or several, when its speed
@@ -1069,6 +1144,7 @@ fn build_timeline(
         // Quantised like every other time: the ramp must land on the same
         // frame grid the overlap does, or the dissolve ends a frame early.
         engine_clip.video_fade_in = quantise(clip.video_fade_in, rate);
+        engine_clip.video_fade_out = quantise(clip.video_fade_out, rate);
 
         if let Some(id) = timeline.add_clip(tracks[clip.track], engine_clip) {
             tracks_of.insert(id, clip.track);
@@ -1436,6 +1512,7 @@ fn preview_timeline(request: &PreviewFrameRequest, rate: FrameRate, gpu: bool) -
     // keeps one conversion path rather than a preview-flavoured copy of it.
     let shim = ExportRequest {
         output: String::new(),
+        scratch_dir: None,
         width: request.width,
         height: request.height,
         rate_num: request.rate_num,
@@ -1613,6 +1690,7 @@ mod tests {
             video_filter_chain: String::new(),
             transition: None,
             video_fade_in: 0.0,
+            video_fade_out: 0.0,
             media_width: None,
             media_height: None,
             has_audio: None,
@@ -1681,6 +1759,7 @@ mod tests {
 
         let request = ExportRequest {
             output: out_path.to_string_lossy().into_owned(),
+            scratch_dir: None,
             width: 64,
             height: 64,
             rate_num: 30,
@@ -1727,6 +1806,230 @@ mod tests {
         let _ = std::fs::remove_file(&black_path);
         let _ = std::fs::remove_file(&source_path);
         let _ = std::fs::remove_file(&written);
+    }
+
+    /// A `scratch_dir` that names a folder other than the output's own must
+    /// still land the finished file exactly at `output`, and leave nothing
+    /// behind in the scratch folder afterwards. Guards the EP1 regression:
+    /// a render that writes for an hour straight to a slow or unreliable
+    /// destination can silently lose data partway through - scratch lets
+    /// that sustained writing happen somewhere reliable instead, with only
+    /// the already-finished file crossing to the real destination. Skips
+    /// silently without FFmpeg.
+    #[test]
+    fn render_with_a_scratch_dir_still_lands_at_output() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_media::{EncodeOptions, Encoder, FrameSink};
+        use std::sync::atomic::AtomicBool;
+
+        let root = std::env::temp_dir().join("puppetcat-scratch-dir-test");
+        let scratch = root.join("scratch");
+        let destination = root.join("destination");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&destination).expect("makes the destination folder");
+        // `scratch` is deliberately left uncreated - `render` must make it.
+
+        let source_path = root.join("source.mp4");
+        let Ok(mut enc) = Encoder::create(
+            &source_path,
+            64,
+            64,
+            FrameRate::THIRTY,
+            &EncodeOptions::default(),
+        ) else {
+            return; // no ffmpeg here
+        };
+        for _ in 0..30 {
+            let mut frame = Frame::black(64, 64);
+            frame.fill([255, 0, 0, 255]);
+            enc.write_frame(&frame).expect("writes");
+        }
+        enc.finish().expect("finishes");
+
+        let mut a = clip("video", 0, 0.0, 1.0, 0.0);
+        a.path = source_path.to_string_lossy().into_owned();
+        a.media_width = Some(64);
+        a.media_height = Some(64);
+
+        let output = destination.join("out.mp4");
+        let request = ExportRequest {
+            output: output.to_string_lossy().into_owned(),
+            scratch_dir: Some(scratch.to_string_lossy().into_owned()),
+            width: 64,
+            height: 64,
+            rate_num: 30,
+            rate_den: 1,
+            crf: 30,
+            preset: "ultrafast".to_owned(),
+            clips: vec![a],
+        };
+        let cancel = AtomicBool::new(false);
+        let mut progress = |_: i64, _: i64, _: &'static str| {};
+        let reporter = Reporter {
+            progress: &mut progress,
+            cancel: &cancel,
+        };
+        let written = render(&request, reporter).expect("renders");
+
+        assert_eq!(written, output.to_string_lossy());
+        assert!(output.is_file(), "the finished file must be at output");
+        assert!(
+            std::fs::read_dir(&scratch)
+                .expect("scratch dir exists")
+                .next()
+                .is_none(),
+            "nothing should be left behind in the scratch folder"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `move_finished_file`'s two contracts on the same filesystem, where
+    /// `rename` always succeeds and the copy-then-delete fallback (the one
+    /// that matters for an actual cross-volume scratch folder, which is not
+    /// something a portable test can force) never even runs: a move lands
+    /// the content and removes the scratch copy, and a move that cannot
+    /// possibly succeed - a destination whose parent does not exist - fails
+    /// loudly rather than losing the file.
+    #[test]
+    fn move_finished_file_moves_or_fails_without_losing_data() {
+        let root = std::env::temp_dir().join("puppetcat-move-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("makes the test folder");
+
+        let from = root.join("from");
+        std::fs::write(&from, b"finished render").expect("writes the source");
+        let to = root.join("to.mp4");
+        move_finished_file(&from, &to).expect("moves on the same filesystem");
+        assert!(to.is_file());
+        assert!(!from.exists(), "a successful move removes the scratch copy");
+        assert_eq!(std::fs::read(&to).unwrap(), b"finished render");
+
+        std::fs::write(&from, b"a second render").expect("writes another source");
+        let nowhere = root.join("nested").join("to.mp4"); // parent does not exist
+        assert!(move_finished_file(&from, &nowhere).is_err());
+        assert!(from.exists(), "a failed move must not delete the source");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The same fade-from-black cut, but through `preview_frame` - the exact
+    /// call the paused monitor and scrub bar make, with `bake_fades = false`
+    /// baked into `preview_timeline`. Must show a real ramp, not a hard cut:
+    /// the whole point of moving this dissolve onto `video_fade_in`/`_out`
+    /// instead of a baked FFmpeg filter is that preview can render it too.
+    /// Skips silently without FFmpeg.
+    #[test]
+    fn preview_shows_the_cross_fade_dissolve_too() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_media::{EncodeOptions, Encoder, FrameSink};
+
+        let dir = std::env::temp_dir();
+        let black_path = dir.join("preview-check-black.mp4");
+        let source_path = dir.join("preview-check-source.mp4");
+
+        let Ok(mut enc) =
+            Encoder::create(&black_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
+        else {
+            return; // no ffmpeg here
+        };
+        for _ in 0..30 {
+            enc.write_frame(&Frame::black(64, 64)).expect("writes");
+        }
+        enc.finish().expect("finishes");
+
+        let mut enc =
+            Encoder::create(&source_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
+                .expect("ffmpeg is here, just proved it above");
+        for i in 0..90 {
+            let mut frame = Frame::black(64, 64);
+            if i < 12 {
+                frame.fill([0, 255, 0, 255]); // the cut footage
+            } else {
+                frame.fill([255, 0, 0, 255]); // the kept footage
+            }
+            enc.write_frame(&frame).expect("writes");
+        }
+        enc.finish().expect("finishes");
+
+        let mut a = clip("video", 0, 0.0, 1.0, 0.0);
+        a.path = black_path.to_string_lossy().into_owned();
+        a.media_width = Some(64);
+        a.media_height = Some(64);
+
+        let mut b = clip("video", 0, 1.0, 2.0, 0.4);
+        b.path = source_path.to_string_lossy().into_owned();
+        b.media_width = Some(64);
+        b.media_height = Some(64);
+        b.transition = spec("cross-fade", 0.5);
+
+        let pool = puppetcat_media::ReaderPool::new(16 * 1024 * 1024, 2);
+        let centre = (32 * 64 + 32) * 4;
+        let red_at = |time: f64| -> u8 {
+            let request = PreviewFrameRequest {
+                time,
+                width: 64,
+                height: 64,
+                rate_num: 30,
+                rate_den: 1,
+                clips: vec![a.clone(), b.clone()],
+            };
+            let bytes = preview_frame(&pool, &request).expect("previews");
+            bytes[centre]
+        };
+
+        // Well before the dissolve: solid black. Well after it: solid red,
+        // the kept footage. In between: rising, not a jump - the ramp
+        // itself is the thing that broke.
+        let before = red_at(0.9);
+        let middle = red_at(1.1);
+        let after = red_at(1.4);
+        assert!(before < 40, "before the dissolve should read black, got {before}");
+        assert!(after > 200, "after the dissolve should read the kept footage, got {after}");
+        assert!(
+            middle > before + 20 && middle < after - 20,
+            "the middle of the dissolve should sit between black and full red \
+             (a ramp, not a jump), got before={before} middle={middle} after={after}"
+        );
+
+        let _ = std::fs::remove_file(&black_path);
+        let _ = std::fs::remove_file(&source_path);
+    }
+
+    /// `verify_mixed_duration` only reads a container's own duration, so a
+    /// plain encoded file stands in fine for a real mixed-audio one - no
+    /// need to synthesize an actual audio stream to exercise it. Skips
+    /// silently without FFmpeg.
+    #[test]
+    fn verify_mixed_duration_catches_a_short_write() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_media::{EncodeOptions, Encoder, FrameSink};
+
+        let path = std::env::temp_dir().join("verify-mixed-duration-test.mp4");
+        let Ok(mut encoder) =
+            Encoder::create(&path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
+        else {
+            return; // no ffmpeg here
+        };
+        for _ in 0..60 {
+            encoder.write_frame(&Frame::black(64, 64)).expect("writes");
+        }
+        encoder.finish().expect("finishes");
+
+        // 60 frames at 30fps is 2 seconds - well short of a 10-second
+        // timeline, exactly the shape a write cut off partway takes.
+        let short = verify_mixed_duration(&path, 10.0);
+        assert!(short.is_err(), "a 2s file for a 10s timeline must be rejected");
+        assert!(
+            short.unwrap_err().contains("disk space"),
+            "the error should point at the likely cause"
+        );
+
+        // The same file against a timeline it actually covers (within the
+        // one-second tolerance) must pass.
+        assert!(verify_mixed_duration(&path, 1.5).is_ok());
+
+        let _ = std::fs::remove_file(&path);
     }
 
     /// End to end against a real FFmpeg: the paused monitor's frame must show
@@ -1873,50 +2176,27 @@ mod tests {
 
     #[test]
     fn a_cross_fade_over_a_real_cut_dips_through_black_instead() {
-        // The outgoing clip's source ends at 3.0; the incoming clip's
+        // The outgoing clip's source ends at 4.0; the incoming clip's
         // source starts at 5.0. The second between them was cut out of the
         // timeline entirely - there is no handle to borrow without
-        // resurfacing it.
-        let mut clips = vec![
-            clip("video", 0, 0.0, 4.0, 0.0),
-            clip("video", 0, 4.0, 4.0, 5.0),
-        ];
-        clips[1].transition = spec("cross-fade", 1.0);
-        resolve_transitions(&mut clips, FrameRate::THIRTY, true);
+        // resurfacing it. An opacity ramp on each side takes its place, so
+        // this must come out the same whether it's baked for export or
+        // read live for the paused monitor and the scrub preview.
+        for bake_fades in [true, false] {
+            let mut clips = vec![
+                clip("video", 0, 0.0, 4.0, 0.0),
+                clip("video", 0, 4.0, 4.0, 5.0),
+            ];
+            clips[1].transition = spec("cross-fade", 1.0);
+            resolve_transitions(&mut clips, FrameRate::THIRTY, bake_fades);
 
-        assert_eq!(clips[1].start, 4.0, "never reaches backwards over the cut");
-        assert_eq!(clips[1].source_start, 5.0, "never rewinds into the cut");
-        assert_eq!(clips[1].video_fade_in, 0.0, "opacity ramp isn't used here");
-
-        // Half a second each side at 30fps is 15 frames, same as fade-black.
-        assert_eq!(
-            clips[0].transition_chain,
-            "fade=t=out:start_frame=105:nb_frames=15"
-        );
-        assert_eq!(
-            clips[1].transition_chain,
-            "fade=t=in:start_frame=0:nb_frames=15"
-        );
-    }
-
-    #[test]
-    fn a_cross_fade_over_a_real_cut_is_a_plain_cut_in_preview() {
-        // Same cut as above, but this is the live-preview call
-        // (bake_fades = false), which can't run the FFmpeg fade filter -
-        // so it must fall back to a plain cut rather than reach into the
-        // removed footage.
-        let mut clips = vec![
-            clip("video", 0, 0.0, 4.0, 0.0),
-            clip("video", 0, 4.0, 4.0, 5.0),
-        ];
-        clips[1].transition = spec("cross-fade", 1.0);
-        resolve_transitions(&mut clips, FrameRate::THIRTY, false);
-
-        assert_eq!(clips[1].start, 4.0);
-        assert_eq!(clips[1].source_start, 5.0);
-        assert_eq!(clips[1].video_fade_in, 0.0);
-        assert!(clips[0].transition_chain.is_empty());
-        assert!(clips[1].transition_chain.is_empty());
+            assert_eq!(clips[1].start, 4.0, "never reaches backwards over the cut");
+            assert_eq!(clips[1].source_start, 5.0, "never rewinds into the cut");
+            assert_eq!(clips[0].video_fade_out, 0.5, "outgoing tail ramps out");
+            assert_eq!(clips[1].video_fade_in, 0.5, "incoming head ramps in");
+            assert!(clips[0].transition_chain.is_empty(), "no baked filter needed");
+            assert!(clips[1].transition_chain.is_empty());
+        }
     }
 
     #[test]
@@ -1925,23 +2205,26 @@ mod tests {
         // filler, not a trimmed piece of the incoming clip's own footage.
         // Extending the incoming clip backwards would play whatever comes
         // before its in-point in its OWN source - which is exactly what got
-        // trimmed off - so this must not borrow a handle either.
-        let mut clips = vec![
-            clip("video", 0, 0.0, 1.0, 0.0),
-            clip("video", 0, 1.0, 4.0, 0.4),
-        ];
-        clips[0].path = "black.mp4".to_owned();
-        clips[1].transition = spec("cross-fade", 0.5);
-        resolve_transitions(&mut clips, FrameRate::THIRTY, true);
+        // trimmed off - so this must not borrow a handle either, and must
+        // land exactly at the user's trim point regardless of preview vs.
+        // export.
+        for bake_fades in [true, false] {
+            let mut clips = vec![
+                clip("video", 0, 0.0, 1.0, 0.0),
+                clip("video", 0, 1.0, 4.0, 0.4),
+            ];
+            clips[0].path = "black.mp4".to_owned();
+            clips[1].transition = spec("cross-fade", 0.5);
+            resolve_transitions(&mut clips, FrameRate::THIRTY, bake_fades);
 
-        assert_eq!(clips[1].start, 1.0);
-        assert_eq!(
-            clips[1].source_start, 0.4,
-            "starts exactly where the user trimmed it, not earlier"
-        );
-        assert_eq!(clips[1].video_fade_in, 0.0);
-        assert!(!clips[0].transition_chain.is_empty());
-        assert!(!clips[1].transition_chain.is_empty());
+            assert_eq!(clips[1].start, 1.0);
+            assert_eq!(
+                clips[1].source_start, 0.4,
+                "starts exactly where the user trimmed it, not earlier"
+            );
+            assert_eq!(clips[0].video_fade_out, 0.25);
+            assert_eq!(clips[1].video_fade_in, 0.25);
+        }
     }
 
     #[test]

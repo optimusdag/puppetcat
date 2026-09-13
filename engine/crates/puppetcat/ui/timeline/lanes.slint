@@ -4,8 +4,9 @@
 import { Theme } from "../theme/theme.slint";
 import { Fmt, Payload } from "../util.slint";
 import { Glyph, Icon } from "../icons.slint";
-import { ClipData, ClipKind, DropData, TimelineTool, TrackData } from "model.slint";
+import { ClipData, ClipKind, DropData, MarkerData, TimelineTool, TrackData } from "model.slint";
 import { ContextMenu, MenuItemData } from "../primitives/context-menu.slint";
+import { Tip } from "../primitives/tooltip.slint";
 
 // The lanes: the ruler, the banded track stack, the clips on it, the playhead
 // and the two band gestures.
@@ -389,11 +390,150 @@ component Clip inherits Rectangle {
     }
 }
 
+// ── one marker ───────────────────────────────────────────────────────────────
+
+// A named pin in the ruler. Drawn as a small flag rather than a full clip: it
+// marks an instant, not a span, and the ruler is where instants belong.
+//
+// Renaming is not a double-click here the way it is on a clip or a track,
+// because double-clicking the ruler is what *adds* a marker (see `scrub`
+// below) - the same gesture cannot mean two things depending on a few pixels
+// of aim. So a marker's `renaming` is driven from outside, by the context
+// menu's Rename row, and the caller is the one that knows which marker (if
+// any) is being renamed right now.
+component Marker inherits Rectangle {
+    in property <MarkerData> item;
+    in property <length> px-per-second;
+    in property <bool> renaming;
+
+    callback pressed();
+    /// Total seconds dragged since the press, window-space - the same
+    /// convention as Clip's `dragged`, so the caller adds it to wherever the
+    /// marker was when the gesture began rather than to a value that has
+    /// itself already moved.
+    callback dragged(seconds: float);
+    callback released();
+    callback context-requested();
+    callback renamed(name: string);
+
+    width: 30px;
+    height: 15px;
+
+    background: touch.pressed ? Theme.accent-hover : Theme.accent;
+    border-radius: Theme.r-xs;
+
+    if !root.renaming: label := Text {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        // The pin's own face: just enough of the name to recognise it by.
+        // The rest is what the tooltip is for.
+        text: root.item.label;
+        color: Theme.on-accent;
+        font-size: Theme.fs-xs;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    if !root.renaming: Tip {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        text: root.item.name;
+        active: touch.has-hover;
+    }
+
+    if root.renaming: Rectangle {
+        x: -35px;
+        width: 100px;
+        height: parent.height;
+        border-radius: Theme.r-xs;
+        background: Theme.well;
+        border-width: 1px;
+        border-color: Theme.accent;
+        clip: true;
+
+        rename := TextInput {
+            x: 4px;
+            y: (parent.height - self.height) / 2;
+            width: parent.width - 8px;
+            text: root.item.name;
+            color: Theme.fg;
+            font-size: Theme.fs-xs;
+            single-line: true;
+            selection-background-color: Theme.accent;
+            selection-foreground-color: Theme.on-accent;
+
+            init => {
+                self.focus();
+                self.select-all();
+            }
+
+            changed has-focus => {
+                if (!self.has-focus && root.renaming) {
+                    root.renamed(self.text);
+                }
+            }
+
+            accepted => { self.clear-focus(); }
+
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    self.text = root.item.name;
+                    self.clear-focus();
+                    return EventResult.accept;
+                }
+                return EventResult.reject;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: root.renaming ? MouseCursor.default : MouseCursor.grab;
+        enabled: !root.renaming;
+
+        pointer-event(event) => {
+            // The right button opens the menu and does not also start a
+            // drag, for the same reason a clip's does not: a menu opening
+            // over a pin that has already jumped is a menu about the wrong
+            // instant.
+            if (event.button == PointerEventButton.right) {
+                if (event.kind == PointerEventKind.up) {
+                    root.context-requested();
+                }
+                return;
+            }
+            if (event.kind == PointerEventKind.down
+                && event.button == PointerEventButton.left) {
+                self.origin-x = self.absolute-position.x + self.mouse-x;
+                root.pressed();
+            } else if (event.kind == PointerEventKind.up
+                || event.kind == PointerEventKind.cancel) {
+                root.released();
+            }
+        }
+
+        moved => {
+            if (self.pressed) {
+                root.dragged(
+                    (self.absolute-position.x + self.mouse-x - self.origin-x)
+                        / root.px-per-second);
+            }
+        }
+
+        property <length> origin-x;
+    }
+}
+
 // ── the lanes ────────────────────────────────────────────────────────────────
 
 export component Lanes inherits Rectangle {
     in property <[TrackData]> tracks;
     in property <[ClipData]> clips;
+    in property <[MarkerData]> markers;
     in property <TimelineTool> tool: TimelineTool.select;
     in property <float> playhead;
     in property <float> frame-rate: 30;
@@ -433,6 +573,40 @@ export component Lanes inherits Rectangle {
         if (root.asked) {
             root.asked = false;
             root.own-token = root.menu-token;
+        }
+    }
+
+    // ── markers ──
+    //
+    // A second, independent menu: a marker's row of actions (Rename, Delete)
+    // has nothing to do with a clip's, and giving them one shared model and
+    // token would mean every id `menu-selected` reports is ambiguous between
+    // "a clip action" and "a marker action" the moment both exist.
+    callback marker-pressed(id: string);
+    callback marker-dragged(id: string, seconds: float);
+    callback marker-released();
+    callback marker-context(id: string);
+    callback marker-menu-selected(id: string);
+    callback marker-renamed(id: string, name: string);
+    /// The ruler was double-clicked somewhere that is not a marker already -
+    /// the gesture that drops a new one.
+    callback marker-add-requested(seconds: float);
+
+    in property <[MenuItemData]> marker-menu-items;
+    in property <length> marker-menu-height;
+    in property <int> marker-menu-token;
+    /// Which marker, if any, is mid-rename: driven entirely from outside, by
+    /// the context menu's Rename row, since a marker has no gesture of its
+    /// own that means "rename me" the way a clip's or a track's double-click
+    /// does - that gesture is already spoken for here (see `scrub`).
+    in property <string> renaming-marker-id: "";
+
+    property <bool> marker-asked;
+    property <int> marker-own-token;
+    changed marker-menu-token => {
+        if (root.marker-asked) {
+            root.marker-asked = false;
+            root.marker-own-token = root.marker-menu-token;
         }
     }
     /// A band closed over this box. Committed on release rather than live:
@@ -550,6 +724,19 @@ export component Lanes inherits Rectangle {
             height: root.lanes-h;
             background: Theme.grid;
             visible: root.tick > 0 && self.x >= 0px && self.x < parent.width;
+        }
+
+        // A thread down through the lanes under each marker, so its exact
+        // instant is still legible once the flag itself has scrolled out of
+        // the ruler.
+        for marker in root.markers: Rectangle {
+            x: root.at(marker.time) - 0.5px;
+            y: root.ruler-height;
+            width: 1px;
+            height: root.lanes-h;
+            background: Theme.accent;
+            opacity: 0.35;
+            visible: self.x >= 0px && self.x < parent.width;
         }
 
         // Declared before the clips, so each clip takes its own press and what
@@ -789,7 +976,9 @@ export component Lanes inherits Rectangle {
 
             // The ruler is the scrub strip. Dragging in the lanes draws a
             // band instead — the convention every NLE shares, and the only way
-            // the two gestures can share one surface.
+            // the two gestures can share one surface. A double-click that
+            // lands here rather than on an existing marker drops a new one at
+            // the point clicked.
             scrub := TouchArea {
                 mouse-cursor: pointer;
                 pointer-event(event) => {
@@ -801,6 +990,30 @@ export component Lanes inherits Rectangle {
                     if (self.pressed) {
                         root.scrubbed(Math.max(0, root.seconds-at(self.mouse-x)));
                     }
+                }
+                double-clicked => {
+                    root.marker-add-requested(Math.max(0, root.seconds-at(self.mouse-x)));
+                }
+            }
+
+            // Declared after `scrub`, so a marker takes its own press before
+            // the strip beneath it turns the same click into a scrub.
+            for marker in root.markers: Marker {
+                x: root.at(marker.time) - self.width / 2;
+                y: 2px;
+                px-per-second: root.px-per-second;
+                item: marker;
+                renaming: marker.id == root.renaming-marker-id;
+
+                pressed => { root.marker-pressed(marker.id); }
+                dragged(seconds) => { root.marker-dragged(marker.id, seconds); }
+                released => { root.marker-released(); }
+                renamed(name) => { root.marker-renamed(marker.id, name); }
+                context-requested => {
+                    marker-menu.request-x = wheel.mouse-x;
+                    marker-menu.request-y = wheel.mouse-y;
+                    root.marker-asked = true;
+                    root.marker-context(marker.id);
                 }
             }
         }
@@ -817,6 +1030,17 @@ export component Lanes inherits Rectangle {
             menu-height: root.menu-height;
             token: root.own-token;
             selected(id) => { root.menu-selected(id); }
+        }
+
+        marker-menu := ContextMenu {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            items: root.marker-menu-items;
+            menu-height: root.marker-menu-height;
+            token: root.marker-own-token;
+            selected(id) => { root.marker-menu-selected(id); }
         }
 
         // ── the playhead ─────────────────────────────────────────────────

@@ -120,6 +120,7 @@ fn main() -> Result<(), slint::PlatformError> {
         editor.set_timeline_tabs(ModelRc::from(models.tabs.clone()));
         editor.set_tracks(ModelRc::from(models.tracks.clone()));
         editor.set_clips(ModelRc::from(models.clips.clone()));
+        editor.set_markers(ModelRc::from(models.markers.clone()));
         editor.set_stage_items(ModelRc::from(models.stage.clone()));
         editor.set_stage_guides(ModelRc::from(models.guides.clone()));
         editor.set_media(ModelRc::from(models.media.clone()));
@@ -137,6 +138,7 @@ fn main() -> Result<(), slint::PlatformError> {
         editor.set_audio_params(ModelRc::from(models.audio_params.clone()));
         editor.set_adjust_params(ModelRc::from(models.adjust_params.clone()));
         editor.set_menu_items(ModelRc::from(models.menu.clone()));
+        editor.set_marker_menu_items(ModelRc::from(models.marker_menu.clone()));
         editor.set_av_items(ModelRc::from(models.av.clone()));
         app.set_app_menu_items(ModelRc::from(models.bar.clone()));
         app.set_transcribers(ModelRc::from(models.transcribers.clone()));
@@ -526,6 +528,54 @@ fn main() -> Result<(), slint::PlatformError> {
         state.merge();
     }));
 
+    // ── markers ──
+    editor.on_add_marker(on_lanes!(|state| {
+        let at = state.playhead;
+        state.apply(puppetcat_project::Command::AddMarker {
+            time: f64::from(at),
+            name: None,
+        });
+    }));
+    editor.on_marker_add_requested(on_lanes!(|state, seconds: f32| {
+        state.apply(puppetcat_project::Command::AddMarker {
+            time: f64::from(seconds),
+            name: None,
+        });
+    }));
+    editor.on_marker_pressed(on_lanes!(|state, id: SharedString| {
+        state.marker_pressed(id.as_str());
+    }));
+    editor.on_marker_dragged(on_lanes!(|state, _id: SharedString, seconds: f32| {
+        state.marker_dragged(seconds);
+    }));
+    editor.on_marker_released(on_lanes!(|state| {
+        state.marker_released();
+    }));
+    editor.on_marker_renamed(on_lanes!(|state, id: SharedString, name: SharedString| {
+        state.apply(puppetcat_project::Command::RenameMarker {
+            marker_id: id.to_string(),
+            name: name.to_string(),
+        });
+        state.renaming_marker_id = None;
+    }));
+    editor.on_marker_context(on_window!(|state, id: SharedString| {
+        state.marker_menu_token += 1;
+        state.marker_menu_target = state.marker(id.as_str()).is_some().then(|| id.to_string());
+    }));
+    editor.on_marker_menu_selected(on_window!(|state, action: SharedString| {
+        let Some(id) = state.marker_menu_target.clone() else {
+            return;
+        };
+        match action.as_str() {
+            "rename" => state.renaming_marker_id = Some(id),
+            "delete" => {
+                state.apply(puppetcat_project::Command::RemoveMarker { marker_id: id });
+                state.marker_menu_target = None;
+            }
+            _ => {}
+        }
+    }));
+
     // ── the view ──
     editor.on_scrubbed(on_lanes!(|state, seconds: f32| {
         state.seek(seconds.max(0.0));
@@ -835,7 +885,7 @@ fn main() -> Result<(), slint::PlatformError> {
             dialog = dialog.set_directory(&state.export.folder);
         }
         if let Some(folder) = dialog.pick_folder() {
-            state.export.folder = folder.to_string_lossy().into_owned();
+            state.set_export_folder(folder.to_string_lossy().into_owned());
         }
     }));
     app.on_export_reveal(on_window!(|state| {
@@ -860,6 +910,21 @@ fn main() -> Result<(), slint::PlatformError> {
         state.settings.language = index.max(0) as usize;
         state.prefs.language = Some(state.settings.language);
         state.prefs.save(&state.host.dirs);
+    }));
+    app.on_settings_temp_export_folder_edited(on_window!(|state, path: SharedString| {
+        let path = path.trim();
+        state.prefs.temp_export_folder = (!path.is_empty()).then(|| path.to_owned());
+        state.prefs.save(&state.host.dirs);
+    }));
+    app.on_settings_temp_export_folder_browse(on_window!(|state| {
+        let mut dialog = rfd::FileDialog::new().set_title("Render exports to");
+        if let Some(folder) = &state.prefs.temp_export_folder {
+            dialog = dialog.set_directory(folder);
+        }
+        if let Some(folder) = dialog.pick_folder() {
+            state.prefs.temp_export_folder = Some(folder.to_string_lossy().into_owned());
+            state.prefs.save(&state.host.dirs);
+        }
     }));
     app.on_settings_transcribe_language_changed(on_window!(|state, index: i32| {
         state.settings.transcribe_language = index

@@ -342,6 +342,7 @@ pub fn instantiate(
         height: info.height,
         rate_num: info.rate_num,
         rate_den: info.rate_den,
+        export_folder: None,
     };
     projects::save(&project.path, &editor.to_document(&settings))?;
 
@@ -484,6 +485,7 @@ mod tests {
             height: 1080,
             rate_num: 30,
             rate_den: 1,
+            export_folder: None,
         };
         let info = save(
             &config,

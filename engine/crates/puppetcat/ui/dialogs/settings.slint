@@ -3,7 +3,7 @@
 
 import { Theme } from "../theme/theme.slint";
 import { Glyph, Icon } from "../icons.slint";
-import { Button, DialogSection, Modal, Progress } from "../primitives/modal.slint";
+import { Button, DialogRow, DialogSection, Field, Modal, Progress } from "../primitives/modal.slint";
 import { IconButton } from "../primitives/panel.slint";
 import { SegmentedControl } from "../primitives/segmented-control.slint";
 import { PaneScroll } from "../workspace/pane.slint";
@@ -51,6 +51,10 @@ export struct SettingsData {
     disk: string,
     version: string,
     engine: string,
+    /// Where an export renders before the finished file moves to wherever
+    /// the user asked for it. Blank means "render in place" - the field's
+    /// placeholder says so.
+    temp-export-folder: string,
 }
 
 // Accuracy, as pips rather than a number: five little bars say "third of five"
@@ -370,6 +374,8 @@ export component SettingsDialog inherits Modal {
     /// say "the other one"; a page with two named options can say which one is
     /// on, which is the whole reason it moved in here.
     callback theme-changed(dark: bool);
+    callback temp-export-folder-edited(path: string);
+    callback temp-export-folder-browse();
     callback transcribe-language-changed(index: int);
     callback model-activated(id: string);
     callback model-download(id: string);
@@ -475,6 +481,32 @@ export component SettingsDialog inherits Modal {
                     label: name;
                     current: index == root.data.language;
                     clicked => { root.language-changed(index); }
+                }
+            }
+
+            // A render that writes for a long time straight to a slow or
+            // unreliable destination - an external or network drive, most
+            // often - can silently lose data partway through. Pointing this
+            // at somewhere fast and local moves that sustained writing off
+            // the risky drive; only the already-finished file has to cross
+            // it, at the very end.
+            if root.data.tab == 0: DialogSection {
+                title: "Exporting";
+
+                DialogRow {
+                    label: "Render to";
+                    Field {
+                        value: root.data.temp-export-folder;
+                        placeholder: "Same as the destination";
+                        technical: true;
+                        edited(text) => { root.temp-export-folder-edited(text); }
+                    }
+
+                    Button {
+                        label: "Browse";
+                        glyph: Glyph.import;
+                        clicked => { root.temp-export-folder-browse(); }
+                    }
                 }
             }
 

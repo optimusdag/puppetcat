@@ -21,8 +21,8 @@
 use serde_json::{Map, Value, json};
 
 use crate::model::{
-    AppliedFilter, Clip, ClipAnimation, ClipKind, Crop, CustomFont, MediaItem, MediaKind, Project,
-    SpeedPoint, TextAlign, TextStyle, Timeline, Track, Transition,
+    AppliedFilter, Clip, ClipAnimation, ClipKind, Crop, CustomFont, Marker, MediaItem, MediaKind,
+    Project, SpeedPoint, TextAlign, TextStyle, Timeline, Track, Transition,
 };
 
 /// Bumped only when a change cannot be absorbed by defaulting.
@@ -98,6 +98,23 @@ fn read_tracks(raw: Option<&Value>) -> Vec<Track> {
                 name: text(entry.get("name"), &id),
                 visible: flag(entry.get("visible"), true),
                 muted: flag(entry.get("muted"), false),
+                id,
+            })
+        })
+        .collect()
+}
+
+fn read_markers(raw: Option<&Value>) -> Vec<Marker> {
+    let Some(entries) = raw.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.get("id")?.as_str()?.to_owned();
+            Some(Marker {
+                name: text(entry.get("name"), "Marker"),
+                time: number(entry.get("time"), 0.0).max(0.0),
                 id,
             })
         })
@@ -290,11 +307,13 @@ pub fn from_document(document: &Value) -> Option<Project> {
                 continue;
             }
             let clips = read_clips(entry.get("clips"), &tracks, &media);
+            let markers = read_markers(entry.get("markers"));
             timelines.push(Timeline {
                 id: id.to_owned(),
                 name: text(entry.get("name"), "Timeline"),
                 tracks,
                 clips,
+                markers,
             });
         }
     }
@@ -304,11 +323,13 @@ pub fn from_document(document: &Value) -> Option<Project> {
             return None;
         }
         let clips = read_clips(document.get("clips"), &tracks, &media);
+        let markers = read_markers(document.get("markers"));
         timelines.push(Timeline {
             id: "TL1".to_owned(),
             name: "Timeline 1".to_owned(),
             tracks,
             clips,
+            markers,
         });
     }
 
@@ -356,6 +377,11 @@ pub struct DocumentSettings {
     pub rate_num: i64,
     /// Denominator of the output frame rate, e.g. 1001 for 29.97fps.
     pub rate_den: i64,
+    /// The folder chosen for this project's last export. `None` until the
+    /// user has picked one, at which point the host defaults to the
+    /// project's own root rather than an app-wide default - kept here, in
+    /// the document, so it travels with the project instead of the machine.
+    pub export_folder: Option<String>,
 }
 
 /// Builds the full `puppetcat.json` document.
@@ -374,6 +400,9 @@ pub fn to_document(settings: &DocumentSettings, project: &Project) -> Value {
             "rateDen": settings.rate_den,
         }),
     );
+    if let Some(export_folder) = &settings.export_folder {
+        document.insert("export".into(), json!({ "folder": export_folder }));
+    }
     document.insert(
         "media".into(),
         serde_json::to_value(&project.media).expect("serialises"),

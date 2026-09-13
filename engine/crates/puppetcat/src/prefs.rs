@@ -27,6 +27,13 @@ pub struct Preferences {
     pub transcribe_language: Option<i32>,
     /// Row in the interface language list.
     pub language: Option<usize>,
+    /// Where an export renders before the finished file moves to wherever
+    /// the user asked for it. `None` renders straight in place, the old
+    /// behaviour. Set this to somewhere fast and local when the real
+    /// destination is slow or unreliable for a render's worth of sustained
+    /// writing - an external or network drive, say - and only the already-
+    /// finished file need cross it.
+    pub temp_export_folder: Option<String>,
 }
 
 impl Preferences {

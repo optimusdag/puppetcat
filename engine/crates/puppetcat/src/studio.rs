@@ -32,7 +32,7 @@ use puppetcat_host::{ProjectInfo, Session, Slot, SlotLock, media, projects, temp
 use puppetcat_media::Peaks;
 use puppetcat_project::commands::{ClipMove, ClipPatch, TrackFlag, TrimEdge};
 use puppetcat_project::model::{
-    self, AppliedFilter, Clip, Project, TextAlign, TextStyle, Timeline, Track, Transition,
+    self, AppliedFilter, Clip, Marker, Project, TextAlign, TextStyle, Timeline, Track, Transition,
 };
 use puppetcat_project::{Command, why_not_merge};
 use slint::{Model, SharedString, VecModel};
@@ -285,6 +285,11 @@ pub enum Gesture {
         duration: f32,
         source_start: f32,
     },
+    /// A marker dragged along the ruler.
+    MoveMarker {
+        marker: String,
+        start: f32,
+    },
     /// A drag on the stage: every selected picture under the playhead slides
     /// with the pointer, from where each one was when the press landed.
     StageMove {
@@ -387,6 +392,7 @@ pub struct Models {
     pub tabs: Rc<VecModel<TimelineTabData>>,
     pub tracks: Rc<VecModel<TrackData>>,
     pub clips: Rc<VecModel<ClipData>>,
+    pub markers: Rc<VecModel<MarkerData>>,
     pub stage: Rc<VecModel<StageItemData>>,
     pub guides: Rc<VecModel<StageGuideData>>,
     pub media: Rc<VecModel<MediaItemData>>,
@@ -407,6 +413,7 @@ pub struct Models {
     /// The colour panel's knobs.
     pub adjust_params: Rc<VecModel<AppliedParamData>>,
     pub menu: Rc<VecModel<MenuItemData>>,
+    pub marker_menu: Rc<VecModel<MenuItemData>>,
     pub av: Rc<VecModel<MenuItemData>>,
     pub bar: Rc<VecModel<MenuItemData>>,
     pub transcribers: Rc<VecModel<ModelData>>,
@@ -422,6 +429,7 @@ impl Models {
             tabs: Rc::new(VecModel::default()),
             tracks: Rc::new(VecModel::default()),
             clips: Rc::new(VecModel::default()),
+            markers: Rc::new(VecModel::default()),
             stage: Rc::new(VecModel::default()),
             guides: Rc::new(VecModel::default()),
             media: Rc::new(VecModel::default()),
@@ -439,6 +447,7 @@ impl Models {
             audio_params: Rc::new(VecModel::default()),
             adjust_params: Rc::new(VecModel::default()),
             menu: Rc::new(VecModel::default()),
+            marker_menu: Rc::new(VecModel::default()),
             av: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
             transcribers: Rc::new(VecModel::default()),
@@ -559,6 +568,15 @@ pub struct Studio {
     pub menu_bar_token: i32,
     pub menu_target: Option<String>,
     pub menu_token: i32,
+    /// The marker a right-click opened the Rename/Delete menu on - a
+    /// separate target from `menu_target`'s clip actions, since the two
+    /// menus share nothing but the component that draws them.
+    pub marker_menu_target: Option<String>,
+    pub marker_menu_token: i32,
+    /// The marker mid-rename, if any - driven by the marker menu's Rename
+    /// row rather than a gesture of the marker's own; see `lanes.slint`'s
+    /// `Marker` component.
+    pub renaming_marker_id: Option<String>,
     pub toast: ToastState,
 
     // ── the launch screen ──
@@ -936,6 +954,9 @@ impl Studio {
             menu_bar_token: 0,
             menu_target: None,
             menu_token: 0,
+            marker_menu_target: None,
+            marker_menu_token: 0,
+            renaming_marker_id: None,
             toast: ToastState::default(),
             on_start: true,
             start: StartState::default(),
@@ -977,6 +998,10 @@ impl Studio {
 
     pub fn clip(&self, id: &str) -> Option<&Clip> {
         self.timeline().clip(id)
+    }
+
+    pub fn marker(&self, id: &str) -> Option<&Marker> {
+        self.timeline().marker(id)
     }
 
     /// The window's frame rate, from the session's settings.
@@ -1175,6 +1200,10 @@ impl Studio {
         self.echo.as_mut()?.active_mut().clip_mut(id)
     }
 
+    pub fn echo_marker_mut(&mut self, id: &str) -> Option<&mut Marker> {
+        self.echo.as_mut()?.active_mut().marker_mut(id)
+    }
+
     fn schedule_autosave(&mut self) {
         // A second and a half after the last change, not after the first:
         // a drag that commits ten edits saves once.
@@ -1210,6 +1239,18 @@ impl Studio {
                 }
             },
         );
+    }
+
+    /// Sets the export destination and remembers it for this project's next
+    /// export, saving right away rather than waiting on the debounced
+    /// autosave - a folder choice should not be lost to a crash before it
+    /// fires.
+    pub fn set_export_folder(&mut self, folder: String) {
+        self.export.folder = folder.clone();
+        if let Some(session) = self.session.as_mut() {
+            session.set_export_folder(folder);
+            self.save(false);
+        }
     }
 
     /// The audible clip set, handed to playback whenever the edit changes.
@@ -2189,9 +2230,10 @@ impl Studio {
                     }
                 }
             }
-            // A stage gesture is the monitor's; the lanes have nothing to
-            // add to it.
+            // A stage gesture is the monitor's, and a marker's is its own
+            // method's; the lanes have nothing to add to either here.
             Gesture::None
+            | Gesture::MoveMarker { .. }
             | Gesture::StageMove { .. }
             | Gesture::StageScale { .. }
             | Gesture::StageRotate { .. } => {}
@@ -2251,12 +2293,61 @@ impl Studio {
             Gesture::None => {
                 self.echo = None;
             }
-            // Not a lane gesture: hand it back untouched, echo and all.
-            other @ (Gesture::StageMove { .. }
+            // Not a clip gesture: hand it back untouched, echo and all. A
+            // marker drag is committed by `marker_released`, its own method.
+            other @ (Gesture::MoveMarker { .. }
+            | Gesture::StageMove { .. }
             | Gesture::StageScale { .. }
             | Gesture::StageRotate { .. }) => {
                 self.gesture = other;
             }
+        }
+    }
+
+    // ── markers ──
+
+    pub fn marker_pressed(&mut self, id: &str) {
+        let Some(marker) = self.marker(id) else {
+            return;
+        };
+        let start = marker.time as f32;
+        self.begin_echo();
+        self.gesture = Gesture::MoveMarker {
+            marker: id.to_owned(),
+            start,
+        };
+    }
+
+    /// The pointer moved: the echo follows it. `seconds` is the total delta
+    /// since the press, not since the last event - see `Marker::dragged` in
+    /// lanes.slint.
+    pub fn marker_dragged(&mut self, seconds: f32) {
+        let Gesture::MoveMarker { marker, start } = &self.gesture else {
+            return;
+        };
+        let (id, at) = (marker.clone(), (start + seconds).max(0.0));
+        if let Some(marker) = self.echo_marker_mut(&id) {
+            marker.time = f64::from(at);
+        }
+    }
+
+    /// The pointer let go: the drag becomes one undo step.
+    pub fn marker_released(&mut self) {
+        let Gesture::MoveMarker { marker, .. } =
+            std::mem::replace(&mut self.gesture, Gesture::None)
+        else {
+            return;
+        };
+        let Some(echo) = self.echo.as_ref() else {
+            return;
+        };
+        let time = echo.active().marker(&marker).map(|marker| marker.time);
+        self.echo = None;
+        if let Some(time) = time {
+            self.apply(Command::MoveMarker {
+                marker_id: marker,
+                time,
+            });
         }
     }
 
@@ -3167,12 +3258,20 @@ impl Studio {
         if let Err(error) = projects::remember(&self.host.dirs.config, info) {
             eprintln!("puppetcat: {error}");
         }
+        // The project's own root until an export has picked somewhere else
+        // for this project - never an app-wide default.
+        let export_folder = session
+            .settings()
+            .export_folder
+            .clone()
+            .unwrap_or_else(|| info.path.clone());
         self.pause();
         self.session = Some(session);
         self.echo = None;
         self.dirty = false;
         self.project_name = info.name.clone();
         self.export.name = projects::folder_name(&info.name);
+        self.export.folder = export_folder;
         self.selection.clear();
         self.media_selected.clear();
         self.lane_view.clear();
@@ -3394,6 +3493,11 @@ impl Studio {
         );
         let spec = ExportSpec {
             output: output.clone(),
+            scratch_dir: self
+                .prefs
+                .temp_export_folder
+                .clone()
+                .filter(|folder| !folder.is_empty()),
             crf: EXPORT_CRF[self.export.quality.min(2)],
             preset: "medium".into(),
         };
@@ -3938,6 +4042,29 @@ impl Studio {
                 .collect(),
         );
 
+        sync(
+            &models.markers,
+            timeline
+                .markers
+                .iter()
+                .map(|marker| MarkerData {
+                    id: marker.id.as_str().into(),
+                    name: marker.name.as_str().into(),
+                    // What the pin itself draws; the tooltip is `name` in
+                    // full. Sliced on chars, not bytes, so a name that opens
+                    // on a multi-byte character does not panic.
+                    label: marker.name.chars().take(4).collect::<String>().into(),
+                    time: marker.time as f32,
+                })
+                .collect(),
+        );
+        editor.set_renaming_marker_id(
+            self.renaming_marker_id
+                .as_deref()
+                .unwrap_or_default()
+                .into(),
+        );
+
         // What is under the playhead. The topmost picture wins, the way the
         // compositor stacks them.
         let playhead = f64::from(self.playhead);
@@ -4270,6 +4397,11 @@ impl Studio {
         sync(&models.menu, rows);
         editor.set_menu_token(self.menu_token);
 
+        let marker_rows = self.marker_menu();
+        editor.set_marker_menu_height(Self::menu_height(&marker_rows));
+        sync(&models.marker_menu, marker_rows);
+        editor.set_marker_menu_token(self.marker_menu_token);
+
         app.set_export(self.export_data());
         app.set_settings(SettingsData {
             open: self.settings.open,
@@ -4288,6 +4420,7 @@ impl Studio {
             },
             version: env!("CARGO_PKG_VERSION").into(),
             engine: format!("concat-engine · FFmpeg {}", puppetcat_media::linked_version()).into(),
+            temp_export_folder: self.prefs.temp_export_folder.clone().unwrap_or_default().into(),
         });
         sync(&models.transcribers, Self::model_rows(&self.transcribers));
         sync(&models.voices, Self::model_rows(&self.voices));
@@ -4482,6 +4615,51 @@ impl Studio {
             checked: false,
         });
         rows
+    }
+
+    /// The right-click menu for the marker it was opened on: just Rename and
+    /// Delete - a marker has nothing else to offer.
+    fn marker_menu(&self) -> Vec<MenuItemData> {
+        let Some(marker) = self
+            .marker_menu_target
+            .as_deref()
+            .and_then(|id| self.marker(id))
+        else {
+            return Vec::new();
+        };
+        vec![
+            MenuItemData {
+                label: marker.name.as_str().into(),
+                kind: MenuRow::Label,
+                ..Default::default()
+            },
+            MenuItemData {
+                id: "rename".into(),
+                label: "Rename".into(),
+                kind: MenuRow::Action,
+                glyph: Glyph::None,
+                shortcut: SharedString::new(),
+                enabled: true,
+                danger: false,
+                checkable: false,
+                checked: false,
+            },
+            MenuItemData {
+                kind: MenuRow::Separator,
+                ..Default::default()
+            },
+            MenuItemData {
+                id: "delete".into(),
+                label: "Delete".into(),
+                kind: MenuRow::Action,
+                glyph: Glyph::Trash,
+                shortcut: SharedString::new(),
+                enabled: true,
+                danger: true,
+                checkable: false,
+                checked: false,
+            },
+        ]
     }
 
     pub fn menu_height(rows: &[MenuItemData]) -> f32 {

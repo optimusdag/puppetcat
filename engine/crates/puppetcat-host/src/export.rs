@@ -13,8 +13,25 @@ use std::sync::atomic::AtomicBool;
 
 pub use puppetcat_export::{ExportClip, ExportRequest, Reporter, render};
 
+use crate::AppDirs;
 use crate::jobs::{Job, SingleFlight};
 use crate::session::Session;
+
+/// The user's remembered scratch folder for exports, straight out of the
+/// window's own `settings.json` - read here, rather than taken as a
+/// `Preferences` value, so the agent (which never builds a `Preferences`)
+/// can honour the same machine-wide choice as the window without either
+/// depending on the other's crate. A missing file, an unset field, or a
+/// blank string are all "no preference", the same as `None`.
+pub fn temp_folder_preference(dirs: &AppDirs) -> Option<String> {
+    let bytes = std::fs::read(dirs.config.join("settings.json")).ok()?;
+    let document: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    document
+        .get("tempExportFolder")?
+        .as_str()
+        .filter(|folder| !folder.is_empty())
+        .map(str::to_owned)
+}
 
 /// What the window decides about an export: where it goes, how good it is,
 /// and any rasterised titles rejoining as image clips.
@@ -22,6 +39,9 @@ use crate::session::Session;
 pub struct ExportSpec {
     /// The file to write.
     pub output: String,
+    /// Where to render before moving the finished file to `output`; see
+    /// [`puppetcat_export::ExportRequest::scratch_dir`].
+    pub scratch_dir: Option<String>,
     /// Constant rate factor; lower is better quality and a bigger file.
     pub crf: u8,
     /// The x264 speed/size preset name, e.g. "medium".
@@ -46,6 +66,7 @@ pub fn request(session: &Session, spec: &ExportSpec, titles: Vec<ExportClip>) ->
     clips.extend(titles);
     ExportRequest {
         output: spec.output.clone(),
+        scratch_dir: spec.scratch_dir.clone(),
         width: settings.width,
         height: settings.height,
         rate_num: settings.rate_num,

@@ -4608,7 +4608,7 @@ checksum = "1d8f70e07b9c3962945a74e59ca1c511bba65b6419468acc217c457d93f3c740"
 
 [[package]]
 name = "puppetcat"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "opener",
  "pollster",
@@ -4629,7 +4629,7 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-agent"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64 0.22.1",
  "puppetcat-core",
@@ -4645,7 +4645,7 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "puppetcat-core",
@@ -4655,11 +4655,11 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-core"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "puppetcat-effects"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "naga",
  "puppetcat-core",
@@ -4671,7 +4671,7 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-export"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "puppetcat-core",
  "puppetcat-effects",
@@ -4683,7 +4683,7 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-host"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cpal",
  "memmap2",
@@ -4699,7 +4699,7 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-media"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "ffmpeg-the-third",
  "libc",
@@ -4709,7 +4709,7 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-project"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "puppetcat-core",
  "serde",
@@ -4719,7 +4719,7 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-render"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "pollster",
  "puppetcat-core",
@@ -4729,7 +4729,7 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-speech"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bzip2 0.6.1",
  "puppetcat-host",
@@ -4744,7 +4744,7 @@ dependencies = [
 
 [[package]]
 name = "puppetcat-text"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fontdb",
  "rustybuzz",

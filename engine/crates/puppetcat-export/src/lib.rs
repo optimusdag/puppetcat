@@ -313,34 +313,92 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
     for cut in cuts {
         match cut.kind.as_str() {
             "cross-fade" => {
-                let (a_track, a_duration) = {
+                let (a_track, a_duration, a_path, a_source_end) = {
                     let a = &clips[cut.outgoing];
-                    (a.track, a.duration)
+                    (
+                        a.track,
+                        a.duration,
+                        a.path.clone(),
+                        a.source_start + a.duration * a.speed,
+                    )
                 };
-                let b = &mut clips[cut.incoming];
 
-                // The incoming clip extends backwards over the outgoing one,
-                // showing the source it has *before* its in-point - the
-                // handle, exactly what a dissolve consumes in any editor. No
-                // handle, shorter dissolve: the duration clamps to what
-                // actually exists rather than freezing or inventing frames.
-                let mut d = cut.duration.min(a_duration).min(b.duration);
-                if b.kind != ClipKind::Image {
-                    d = d.min(b.source_start / b.speed.max(0.0625));
+                // Borrowing a handle - source the incoming clip has *before*
+                // its in-point - is only honest when that source is already
+                // covered by the outgoing clip: the same media, with nothing
+                // missing between where it leaves off and where the incoming
+                // clip picks up. Then the dissolve reveals nothing the
+                // timeline isn't already showing (touching exactly, or even
+                // overlapping, is fine - only a real gap is not). A still
+                // has no such concept - the same frame is available
+                // regardless - so it always qualifies. The moment there's an
+                // actual cut between them (a gap in source time, or
+                // different media entirely), the "handle" would be exactly
+                // the footage that edit removed, so there is none to borrow.
+                let has_handle = {
+                    let b = &clips[cut.incoming];
+                    b.kind == ClipKind::Image
+                        || (a_path == b.path && b.source_start - a_source_end < frame / 2.0)
+                };
+
+                if has_handle {
+                    let b = &mut clips[cut.incoming];
+                    // No handle, shorter dissolve: the duration clamps to
+                    // what actually exists rather than freezing or inventing
+                    // frames.
+                    let mut d = cut.duration.min(a_duration).min(b.duration);
+                    if b.kind != ClipKind::Image {
+                        d = d.min(b.source_start / b.speed.max(0.0625));
+                    }
+                    if d < frame {
+                        continue;
+                    }
+                    b.start -= d;
+                    b.duration += d;
+                    if b.kind != ClipKind::Image {
+                        b.source_start -= d * b.speed;
+                    }
+                    b.video_fade_in = d;
+                    // Sound rides the picture: the pre-roll fades in rather
+                    // than arriving at full level a dissolve early.
+                    b.fade_in = b.fade_in.max(d);
+                    b.track = a_track + 1;
+                } else if bake_fades {
+                    // No handle to borrow without surfacing the cut: dip
+                    // through black instead, using only footage each clip
+                    // already shows - the outgoing clip's real tail fading
+                    // out, the incoming clip's real head fading in. Frame-
+                    // based for the same reason fade-black is: the decoder
+                    // emits exactly one frame per output frame.
+                    let half =
+                        cut.duration.min(a_duration).min(clips[cut.incoming].duration) / 2.0;
+                    if half < frame / 2.0 {
+                        continue;
+                    }
+                    {
+                        let a = &mut clips[cut.outgoing];
+                        let frames = ((half.min(a.duration) * fps).round() as i64).max(1);
+                        let total = (a.duration * fps).round() as i64;
+                        append_filter(
+                            &mut a.transition_chain,
+                            &format!(
+                                "fade=t=out:start_frame={}:nb_frames={frames}",
+                                (total - frames).max(0)
+                            ),
+                        );
+                    }
+                    {
+                        let b = &mut clips[cut.incoming];
+                        let frames = ((half.min(b.duration) * fps).round() as i64).max(1);
+                        append_filter(
+                            &mut b.transition_chain,
+                            &format!("fade=t=in:start_frame=0:nb_frames={frames}"),
+                        );
+                    }
                 }
-                if d < frame {
-                    continue;
-                }
-                b.start -= d;
-                b.duration += d;
-                if b.kind != ClipKind::Image {
-                    b.source_start -= d * b.speed;
-                }
-                b.video_fade_in = d;
-                // Sound rides the picture: the pre-roll fades in rather than
-                // arriving at full level a dissolve early.
-                b.fade_in = b.fade_in.max(d);
-                b.track = a_track + 1;
+                // Neither safe to blend nor baking fades (a live preview):
+                // render the cut plainly rather than reach past either
+                // clip's trim.
             }
             "fade-black" | "fade-white" if bake_fades => {
                 // Half the duration on each side of the cut, as fade filters
@@ -1568,6 +1626,109 @@ mod tests {
         })
     }
 
+    /// End to end against a real FFmpeg, through the actual `render()` entry
+    /// point (bake_fades = true): a black filler clip cross-fading into a
+    /// clip trimmed past some cut footage. The source's first 12 frames
+    /// (0.4s) are green, standing in for footage the user cut off the
+    /// front; the rest is red. The incoming clip is trimmed to start at
+    /// source 0.4, right past the green. No output frame may ever be green.
+    /// Skips silently without FFmpeg.
+    #[test]
+    fn a_cross_fade_render_never_shows_cut_footage() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_media::{DecodeOptions, Decoder, EncodeOptions, Encoder, FrameSink};
+        use std::sync::atomic::AtomicBool;
+
+        let dir = std::env::temp_dir();
+        let black_path = dir.join("manual-check-black.mp4");
+        let source_path = dir.join("manual-check-source.mp4");
+        let out_path = dir.join("manual-check-out.mp4");
+
+        let Ok(mut enc) =
+            Encoder::create(&black_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
+        else {
+            return; // no ffmpeg here
+        };
+        for _ in 0..30 {
+            enc.write_frame(&Frame::black(64, 64)).expect("writes");
+        }
+        enc.finish().expect("finishes");
+
+        let mut enc =
+            Encoder::create(&source_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
+                .expect("ffmpeg is here, just proved it above");
+        for i in 0..90 {
+            let mut frame = Frame::black(64, 64);
+            if i < 12 {
+                frame.fill([0, 255, 0, 255]); // the cut footage
+            } else {
+                frame.fill([255, 0, 0, 255]); // the kept footage
+            }
+            enc.write_frame(&frame).expect("writes");
+        }
+        enc.finish().expect("finishes");
+
+        let mut a = clip("video", 0, 0.0, 1.0, 0.0);
+        a.path = black_path.to_string_lossy().into_owned();
+        a.media_width = Some(64);
+        a.media_height = Some(64);
+
+        let mut b = clip("video", 0, 1.0, 2.0, 0.4);
+        b.path = source_path.to_string_lossy().into_owned();
+        b.media_width = Some(64);
+        b.media_height = Some(64);
+        b.transition = spec("cross-fade", 0.5);
+
+        let request = ExportRequest {
+            output: out_path.to_string_lossy().into_owned(),
+            width: 64,
+            height: 64,
+            rate_num: 30,
+            rate_den: 1,
+            crf: 23,
+            preset: "medium".to_owned(),
+            clips: vec![a, b],
+        };
+        let cancel = AtomicBool::new(false);
+        let mut progress = |_: i64, _: i64, _: &'static str| {};
+        let reporter = Reporter {
+            progress: &mut progress,
+            cancel: &cancel,
+        };
+        let written = render(&request, reporter).expect("renders");
+
+        let mut decoder = Decoder::open(&written, &DecodeOptions::default()).expect("decodes");
+        let mut frame_no = 0;
+        let mut saw_green = false;
+        let mut last_red_frame = None;
+        while let Some(frame) = decoder.next_frame().expect("decodes a frame") {
+            if let Some([r, g, b, _]) = frame.pixel(32, 32) {
+                if g > 150 && r < 100 {
+                    saw_green = true;
+                    eprintln!("frame {frame_no}: GREEN ({r},{g},{b}) - cut footage leaked!");
+                }
+                if r > 150 && g < 100 {
+                    last_red_frame = Some(frame_no);
+                }
+            }
+            frame_no += 1;
+        }
+
+        assert!(!saw_green, "the export must never show the cut footage");
+        assert!(
+            last_red_frame.is_some(),
+            "the kept footage must still show up eventually"
+        );
+        eprintln!(
+            "OK: {frame_no} frames decoded, no green, last confirmed red frame {:?}",
+            last_red_frame
+        );
+
+        let _ = std::fs::remove_file(&black_path);
+        let _ = std::fs::remove_file(&source_path);
+        let _ = std::fs::remove_file(&written);
+    }
+
     /// End to end against a real FFmpeg: the paused monitor's frame must show
     /// the footage, not an empty composite. Skips silently without FFmpeg.
     #[test]
@@ -1708,6 +1869,79 @@ mod tests {
             clips[1].source_start, 0.0,
             "a still has no source clock to rewind"
         );
+    }
+
+    #[test]
+    fn a_cross_fade_over_a_real_cut_dips_through_black_instead() {
+        // The outgoing clip's source ends at 3.0; the incoming clip's
+        // source starts at 5.0. The second between them was cut out of the
+        // timeline entirely - there is no handle to borrow without
+        // resurfacing it.
+        let mut clips = vec![
+            clip("video", 0, 0.0, 4.0, 0.0),
+            clip("video", 0, 4.0, 4.0, 5.0),
+        ];
+        clips[1].transition = spec("cross-fade", 1.0);
+        resolve_transitions(&mut clips, FrameRate::THIRTY, true);
+
+        assert_eq!(clips[1].start, 4.0, "never reaches backwards over the cut");
+        assert_eq!(clips[1].source_start, 5.0, "never rewinds into the cut");
+        assert_eq!(clips[1].video_fade_in, 0.0, "opacity ramp isn't used here");
+
+        // Half a second each side at 30fps is 15 frames, same as fade-black.
+        assert_eq!(
+            clips[0].transition_chain,
+            "fade=t=out:start_frame=105:nb_frames=15"
+        );
+        assert_eq!(
+            clips[1].transition_chain,
+            "fade=t=in:start_frame=0:nb_frames=15"
+        );
+    }
+
+    #[test]
+    fn a_cross_fade_over_a_real_cut_is_a_plain_cut_in_preview() {
+        // Same cut as above, but this is the live-preview call
+        // (bake_fades = false), which can't run the FFmpeg fade filter -
+        // so it must fall back to a plain cut rather than reach into the
+        // removed footage.
+        let mut clips = vec![
+            clip("video", 0, 0.0, 4.0, 0.0),
+            clip("video", 0, 4.0, 4.0, 5.0),
+        ];
+        clips[1].transition = spec("cross-fade", 1.0);
+        resolve_transitions(&mut clips, FrameRate::THIRTY, false);
+
+        assert_eq!(clips[1].start, 4.0);
+        assert_eq!(clips[1].source_start, 5.0);
+        assert_eq!(clips[1].video_fade_in, 0.0);
+        assert!(clips[0].transition_chain.is_empty());
+        assert!(clips[1].transition_chain.is_empty());
+    }
+
+    #[test]
+    fn a_cross_fade_from_different_media_dips_through_black() {
+        // A "fade in from black": the outgoing clip is a solid-colour
+        // filler, not a trimmed piece of the incoming clip's own footage.
+        // Extending the incoming clip backwards would play whatever comes
+        // before its in-point in its OWN source - which is exactly what got
+        // trimmed off - so this must not borrow a handle either.
+        let mut clips = vec![
+            clip("video", 0, 0.0, 1.0, 0.0),
+            clip("video", 0, 1.0, 4.0, 0.4),
+        ];
+        clips[0].path = "black.mp4".to_owned();
+        clips[1].transition = spec("cross-fade", 0.5);
+        resolve_transitions(&mut clips, FrameRate::THIRTY, true);
+
+        assert_eq!(clips[1].start, 1.0);
+        assert_eq!(
+            clips[1].source_start, 0.4,
+            "starts exactly where the user trimmed it, not earlier"
+        );
+        assert_eq!(clips[1].video_fade_in, 0.0);
+        assert!(!clips[0].transition_chain.is_empty());
+        assert!(!clips[1].transition_chain.is_empty());
     }
 
     #[test]

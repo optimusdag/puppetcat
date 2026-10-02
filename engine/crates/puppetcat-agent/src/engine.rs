@@ -1171,4 +1171,107 @@ mod tests {
         assert!(report.checks.iter().any(|check| check.code == "no_project"));
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn lifecycle_moves_and_renames_without_overwriting() {
+        let root = scratch("lifecycle");
+        let agent = engine(&root);
+        let info = agent
+            .create_project(
+                &root.join("projects").to_string_lossy(),
+                "Life",
+                1920,
+                1080,
+                30,
+                1,
+            )
+            .expect("creates");
+
+        let exports = root.join("exports");
+        assert!(
+            agent
+                .set_export_directory(&exports.to_string_lossy(), false)
+                .is_err()
+        );
+        agent
+            .set_export_directory(&exports.to_string_lossy(), true)
+            .expect("creates");
+        assert_eq!(agent.rename_project("Renamed").unwrap(), "Renamed");
+        assert!(agent.rename_project("  ").is_err());
+
+        let target = root.join("projects").join("Moved");
+        std::fs::create_dir_all(&target).unwrap();
+        assert!(
+            agent.move_project(&target.to_string_lossy()).is_err(),
+            "existing destination"
+        );
+        std::fs::remove_dir(&target).unwrap();
+        let moved = agent
+            .move_project(&target.to_string_lossy())
+            .expect("moves");
+        assert!(moved.path.ends_with("Moved"));
+        assert!(!Path::new(&info.path).exists());
+        assert!(agent.get_state().is_ok());
+
+        let (from, to) = (root.join("a.mp4"), root.join("out").join("b.mp4"));
+        std::fs::write(&from, b"video").unwrap();
+        let report = agent
+            .move_output(&from.to_string_lossy(), &to.to_string_lossy(), false, true)
+            .expect("moves");
+        assert_eq!(report.bytes, 5);
+        assert!(!from.exists() && to.exists());
+        std::fs::write(&from, b"other").unwrap();
+        assert!(
+            agent
+                .move_output(&from.to_string_lossy(), &to.to_string_lossy(), false, true)
+                .is_err()
+        );
+        assert!(from.exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn relink_reports_missing_files_and_changes_nothing() {
+        let root = scratch("relink");
+        let agent = engine(&root);
+        agent
+            .create_project(
+                &root.join("projects").to_string_lossy(),
+                "Relink",
+                1920,
+                1080,
+                30,
+                1,
+            )
+            .expect("creates");
+        agent
+            .apply(Command::AddMedia {
+                item: puppetcat_project::commands::NewMedia {
+                    path: "/old/clip.mp4".to_owned(),
+                    name: "clip.mp4".to_owned(),
+                    duration: Some(2.0),
+                    kind: puppetcat_project::model::MediaKind::Video,
+                    width: None,
+                    height: None,
+                    frame_rate: None,
+                    frame_rate_fraction: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    has_audio: false,
+                },
+            })
+            .expect("adds");
+        let revision = agent.get_state().unwrap().revision;
+        let report = agent
+            .relink_media(
+                vec![],
+                Some(("/old".to_owned(), "/nowhere".to_owned())),
+                false,
+            )
+            .expect("reports");
+        assert!(!report.committed);
+        assert_eq!(report.items[0].status, "missing");
+        assert_eq!(agent.get_state().unwrap().revision, revision);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

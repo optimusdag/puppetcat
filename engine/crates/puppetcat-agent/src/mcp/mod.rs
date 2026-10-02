@@ -635,6 +635,9 @@ impl ConcatAgentServer {
                 "editPlanDryRun": true,
                 "editPlanDiff": true,
                 "rippleDelete": true,
+                "rippleTrim": true,
+                "rippleInsert": true,
+                "insertGap": true,
                 "batchExport": true,
                 "layoutTemplates": true,
                 "mediaRelink": true,
@@ -1298,7 +1301,7 @@ impl ConcatAgentServer {
     }
 
     #[tool(
-        description = "Apply several commands as one transaction. Requires `expectedRevision` (the `revision` of the latest state); a stale value is rejected. The plan is staged on a copy, validated, then committed as a single undo step - any failure commits nothing. Use `dryRun` to preview: returns old/new revision, per-operation `createdIds`, `refs`, clip/marker/media deltas, duration change, the validation report and a field-level `diff`. Includes the curated op `rippleDelete` ({clipIds, ripplePolicy: none|selectedTracks|allTracks, linkPolicy: preserve|detach|explicit, markerPolicy: attachedOnly|shiftFree|fixed})."
+        description = "Apply several commands as one transaction. Requires `expectedRevision` (the `revision` of the latest state); a stale value is rejected. The plan is staged on a copy, validated, then committed as a single undo step - any failure commits nothing. Use `dryRun` to preview: returns old/new revision, per-operation `createdIds`, `refs`, clip/marker/media deltas, duration change, the validation report and a field-level `diff`. Includes ripple ops sharing ripplePolicy (none|selectedTracks|allTracks), linkPolicy (preserve|detach|explicit) and markerPolicy (attachedOnly|shiftFree|fixed): `rippleDelete` {clipIds}, `rippleTrim` {clipId, edge: start|end, delta}, `rippleInsert` {mediaId, trackId, start} and `insertGap` {at, duration, trackIds}. Defaults: selectedTracks, preserve, shiftFree."
     )]
     fn apply_edit_plan(
         &self,

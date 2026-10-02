@@ -501,6 +501,68 @@ pub enum Command {
         #[serde(default)]
         marker_policy: MarkerPolicy,
     },
+    /// Trims a clip and moves everything after it by the change in length,
+    /// so no gap opens and no overlap forms. Trimming the head keeps the
+    /// clip where it started rather than sliding it forward. Policies are
+    /// those of [`Command::RippleDelete`]; under `preserve`, linked audio is
+    /// trimmed the same way.
+    RippleTrim {
+        /// The clip to trim.
+        clip_id: String,
+        /// Which edge moves.
+        edge: TrimEdge,
+        /// Seconds the edge moves; positive is rightwards.
+        delta: f64,
+        /// Which lanes follow.
+        #[serde(default)]
+        ripple_policy: RipplePolicy,
+        /// What becomes of linked audio.
+        #[serde(default)]
+        link_policy: LinkPolicy,
+        /// What markers do.
+        #[serde(default)]
+        marker_policy: MarkerPolicy,
+    },
+    /// Places a clip and pushes everything at or after its start later by
+    /// its length. Clips that straddle the insertion point are left where
+    /// they are. Mints a "c" id.
+    RippleInsert {
+        /// The bin item to cut from.
+        media_id: String,
+        /// The lane to place it on.
+        track_id: String,
+        /// Where it goes, in seconds.
+        start: f64,
+        /// Which lanes make room.
+        #[serde(default)]
+        ripple_policy: RipplePolicy,
+        /// What becomes of linked audio.
+        #[serde(default)]
+        link_policy: LinkPolicy,
+        /// What markers do.
+        #[serde(default)]
+        marker_policy: MarkerPolicy,
+    },
+    /// Opens empty time: everything at or after `at` moves later by
+    /// `duration`. With `selectedTracks`, `track_ids` names the lanes.
+    InsertGap {
+        /// Where the gap opens, in seconds.
+        at: f64,
+        /// Its length in seconds; zero or less is a no-op.
+        duration: f64,
+        /// The lanes that make room under `selectedTracks`.
+        #[serde(default)]
+        track_ids: Vec<String>,
+        /// Which lanes make room.
+        #[serde(default)]
+        ripple_policy: RipplePolicy,
+        /// What becomes of linked audio.
+        #[serde(default)]
+        link_policy: LinkPolicy,
+        /// What markers do.
+        #[serde(default)]
+        marker_policy: MarkerPolicy,
+    },
     /// Saves a layout under its name, replacing one of the same name. A blank
     /// name is a no-op.
     SaveLayoutTemplate {
@@ -847,6 +909,94 @@ pub fn why_not_merge(timeline: &Timeline, clip_ids: &[String]) -> Option<String>
         }
     }
     None
+}
+
+/// The lanes a ripple touches: `None` is every lane.
+fn lanes_for(
+    policy: RipplePolicy,
+    selected: impl Iterator<Item = String>,
+) -> Option<HashSet<String>> {
+    match policy {
+        RipplePolicy::AllTracks => None,
+        _ => Some(selected.collect()),
+    }
+}
+
+/// Clips linked to any of `ids`, in either direction, excluding `ids`.
+fn linked_partners(timeline: &Timeline, ids: &[String]) -> Vec<String> {
+    timeline
+        .clips
+        .iter()
+        .filter(|clip| !ids.contains(&clip.id))
+        .filter(|clip| {
+            clip.detached_from
+                .as_ref()
+                .is_some_and(|parent| ids.contains(parent))
+                || ids.iter().any(|id| {
+                    timeline
+                        .clip(id)
+                        .and_then(|c| c.detached_from.as_ref())
+                        .is_some_and(|parent| *parent == clip.id)
+                })
+        })
+        .map(|clip| clip.id.clone())
+        .collect()
+}
+
+/// Moves everything starting at or after `from` by `amount` seconds on the
+/// given lanes (all when `None`), skipping `exclude`, under the link and
+/// marker policies.
+#[allow(clippy::too_many_arguments)]
+fn shift_after(
+    timeline: &mut Timeline,
+    from: f64,
+    amount: f64,
+    lanes: Option<&HashSet<String>>,
+    exclude: &HashSet<String>,
+    ripple: RipplePolicy,
+    link: LinkPolicy,
+    marker: MarkerPolicy,
+) {
+    if ripple == RipplePolicy::None || amount == 0.0 {
+        return;
+    }
+    const EPSILON: f64 = 1e-9;
+    let mut moving: HashSet<String> = timeline
+        .clips
+        .iter()
+        .filter(|clip| !exclude.contains(&clip.id))
+        .filter(|clip| lanes.is_none_or(|lanes| lanes.contains(&clip.track_id)))
+        .filter(|clip| clip.start >= from - EPSILON)
+        .map(|clip| clip.id.clone())
+        .collect();
+    if link == LinkPolicy::Preserve {
+        let ids: Vec<String> = moving.iter().cloned().collect();
+        moving.extend(
+            linked_partners(timeline, &ids)
+                .into_iter()
+                .filter(|id| !exclude.contains(id)),
+        );
+    }
+    if marker == MarkerPolicy::Fixed {
+        for m in &mut timeline.markers {
+            if m.clip_id.as_ref().is_some_and(|id| moving.contains(id)) {
+                m.clip_id = None;
+                m.offset = 0.0;
+            }
+        }
+    }
+    for clip in &mut timeline.clips {
+        if moving.contains(&clip.id) {
+            clip.start = (clip.start + amount).max(0.0);
+        }
+    }
+    if marker == MarkerPolicy::ShiftFree {
+        for m in timeline.markers.iter_mut().filter(|m| m.clip_id.is_none()) {
+            if m.time >= from - EPSILON {
+                m.time = (m.time + amount).max(0.0);
+            }
+        }
+    }
 }
 
 /// Assigns `value` into `slot`, reporting whether that changed anything.
@@ -2029,6 +2179,152 @@ fn apply_command(
             Ok(Outcome {
                 created_id: None,
                 applied: true,
+            })
+        }
+
+        Command::RippleTrim {
+            clip_id,
+            edge,
+            delta,
+            ripple_policy,
+            link_policy,
+            marker_policy,
+        } => {
+            let timeline = project.active().clone();
+            let Some(clip) = timeline.clip(&clip_id) else {
+                return Ok(Outcome::default());
+            };
+            let lane = clip.track_id.clone();
+            let old_end = clip.start + clip.duration;
+            let mut trimmed = vec![clip_id.clone()];
+            if link_policy == LinkPolicy::Preserve {
+                trimmed.extend(linked_partners(&timeline, &[clip_id.clone()]));
+            }
+            let mut change = 0.0;
+            let mut applied = false;
+            for id in &trimmed {
+                let Some(before) = project.active().clip(id) else {
+                    continue;
+                };
+                let (start, duration) = (before.start, before.duration);
+                applied |= apply_command(
+                    project,
+                    mint,
+                    Command::TrimClip {
+                        clip_id: id.clone(),
+                        edge,
+                        delta,
+                    },
+                )?
+                .applied;
+                let after = project.active_mut().clip_mut(id).expect("still there");
+                if *id == clip_id {
+                    change = after.duration - duration;
+                }
+                if edge == TrimEdge::Start {
+                    after.start = start;
+                }
+            }
+            if applied && change != 0.0 {
+                let exclude: HashSet<String> = trimmed.into_iter().collect();
+                let lanes = lanes_for(ripple_policy, std::iter::once(lane));
+                shift_after(
+                    project.active_mut(),
+                    old_end,
+                    change,
+                    lanes.as_ref(),
+                    &exclude,
+                    ripple_policy,
+                    link_policy,
+                    marker_policy,
+                );
+            }
+            Ok(Outcome {
+                created_id: None,
+                applied,
+            })
+        }
+
+        Command::RippleInsert {
+            media_id,
+            track_id,
+            start,
+            ripple_policy,
+            link_policy,
+            marker_policy,
+        } => {
+            let outcome = apply_command(
+                project,
+                mint,
+                Command::AddClip {
+                    media_id,
+                    track_id: track_id.clone(),
+                    start,
+                },
+            )?;
+            let id = outcome.created_id.clone().expect("AddClip mints an id");
+            let timeline = project.active_mut();
+            let (at, length) = {
+                let clip = timeline.clip(&id).expect("just added");
+                (clip.start, clip.duration)
+            };
+            let lanes = lanes_for(ripple_policy, std::iter::once(track_id));
+            shift_after(
+                timeline,
+                at,
+                length,
+                lanes.as_ref(),
+                &HashSet::from([id]),
+                ripple_policy,
+                link_policy,
+                marker_policy,
+            );
+            Ok(outcome)
+        }
+
+        Command::InsertGap {
+            at,
+            duration,
+            track_ids,
+            ripple_policy,
+            link_policy,
+            marker_policy,
+        } => {
+            if duration <= 0.0 || ripple_policy == RipplePolicy::None {
+                return Ok(Outcome::default());
+            }
+            if ripple_policy == RipplePolicy::SelectedTracks && track_ids.is_empty() {
+                return Err(CommandError::Rejected(
+                    "name trackIds, or use allTracks, to say which lanes make room".to_owned(),
+                ));
+            }
+            let lanes = lanes_for(ripple_policy, track_ids.into_iter());
+            let timeline = project.active_mut();
+            let before: Vec<f64> = timeline.clips.iter().map(|clip| clip.start).collect();
+            let markers_before: Vec<f64> = timeline.markers.iter().map(|m| m.time).collect();
+            shift_after(
+                timeline,
+                at.max(0.0),
+                duration,
+                lanes.as_ref(),
+                &HashSet::new(),
+                ripple_policy,
+                link_policy,
+                marker_policy,
+            );
+            let applied = timeline
+                .clips
+                .iter()
+                .zip(before)
+                .any(|(clip, start)| clip.start != start)
+                || timeline
+                    .markers
+                    .iter()
+                    .zip(markers_before)
+                    .any(|(marker, time)| marker.time != time);
+            Ok(Outcome {
+                created_id: None,
+                applied,
             })
         }
 

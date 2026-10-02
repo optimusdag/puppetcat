@@ -1685,4 +1685,191 @@ mod tests {
         assert_ne!(agent.get_state().unwrap().revision, before);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn ripple_trim_insert_and_gap_move_the_rest_of_the_timeline() {
+        use serde_json::json;
+        let (root, agent, first) = project_with_clip("ripple-edits");
+        let media = agent.get_state().unwrap().project.media[0].id.clone();
+        let second = agent
+            .apply(Command::AddClip {
+                media_id: media.clone(),
+                track_id: "T1".to_owned(),
+                start: 10.0,
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        agent
+            .apply(Command::AddMarker {
+                time: 12.0,
+                name: Some("free".to_owned()),
+                clip_id: None,
+            })
+            .unwrap();
+        let clip = |id: &str| {
+            agent
+                .get_state()
+                .unwrap()
+                .project
+                .active()
+                .clips
+                .iter()
+                .find(|c| c.id == id)
+                .cloned()
+                .unwrap()
+        };
+        let run = |op: serde_json::Value| {
+            let revision = agent.get_state().unwrap().revision;
+            agent
+                .apply_edit_plan(revision, vec![op], false, true)
+                .expect("plan")
+        };
+
+        // Shortening the tail of the first clip pulls the second one in.
+        run(json!({"op": "rippleTrim", "clipId": first, "edge": "end", "delta": -4.0}));
+        assert_eq!(clip(&first).duration, 6.0);
+        assert_eq!(clip(&second).start, 6.0);
+        assert_eq!(
+            agent.get_state().unwrap().project.active().markers[0].time,
+            8.0
+        );
+
+        // Trimming the head keeps the clip in place and still closes up.
+        run(json!({"op": "rippleTrim", "clipId": first, "edge": "start", "delta": 1.0}));
+        assert_eq!(clip(&first).start, 0.0);
+        assert_eq!(clip(&first).duration, 5.0);
+        assert_eq!(clip(&second).start, 5.0);
+
+        // Inserting a 10s clip at 5 pushes the second one out by 10.
+        let inserted = run(
+            json!({"op": "rippleInsert", "mediaId": media, "trackId": "T1", "start": 5.0, "ref": "new"}),
+        );
+        let new = inserted.refs["new"].clone();
+        assert_eq!(clip(&new).start, 5.0);
+        assert_eq!(clip(&second).start, 15.0);
+
+        // A gap on the selected lane, and an error when no lane is named.
+        run(json!({"op": "insertGap", "at": 15.0, "duration": 2.0, "trackIds": ["T1"]}));
+        assert_eq!(clip(&second).start, 17.0);
+        let revision = agent.get_state().unwrap().revision;
+        let bad = json!({"op": "insertGap", "at": 0.0, "duration": 1.0});
+        assert!(
+            agent
+                .apply_edit_plan(revision, vec![bad], false, true)
+                .is_err()
+        );
+
+        // ripplePolicy none trims without moving anything.
+        run(
+            json!({"op": "rippleTrim", "clipId": first, "edge": "end", "delta": -1.0, "ripplePolicy": "none"}),
+        );
+        assert_eq!(clip(&second).start, 17.0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ripple_trim_keeps_linked_audio_in_step_unless_told_otherwise() {
+        use serde_json::json;
+        let (root, agent, video) = project_with_clip("ripple-links");
+        // Give the media audio so it can be detached.
+        let media = agent.get_state().unwrap().project.media[0].id.clone();
+        agent
+            .apply(Command::RemoveMedia {
+                media_id: media.clone(),
+            })
+            .unwrap();
+        let new_media = |path: &str| puppetcat_project::commands::NewMedia {
+            path: path.to_owned(),
+            name: "av.mp4".to_owned(),
+            duration: Some(10.0),
+            kind: puppetcat_project::model::MediaKind::Video,
+            width: None,
+            height: None,
+            frame_rate: None,
+            frame_rate_fraction: None,
+            video_codec: None,
+            audio_codec: None,
+            has_audio: true,
+        };
+        let _ = video;
+        let media = agent
+            .apply(Command::AddMedia {
+                item: new_media("/nowhere/av.mp4"),
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        let video = agent
+            .apply(Command::AddClip {
+                media_id: media.clone(),
+                track_id: "T1".to_owned(),
+                start: 0.0,
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        let after = agent
+            .apply(Command::AddClip {
+                media_id: media,
+                track_id: "T1".to_owned(),
+                start: 10.0,
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        agent
+            .apply(Command::DetachAudio {
+                clip_id: video.clone(),
+            })
+            .unwrap();
+        let state = agent.get_state().unwrap();
+        let audio = state
+            .project
+            .active()
+            .clips
+            .iter()
+            .find(|c| c.detached_from.as_deref() == Some(video.as_str()))
+            .expect("detached audio")
+            .id
+            .clone();
+        let clip = |id: &str| {
+            agent
+                .get_state()
+                .unwrap()
+                .project
+                .active()
+                .clips
+                .iter()
+                .find(|c| c.id == id)
+                .cloned()
+                .unwrap()
+        };
+
+        let revision = agent.get_state().unwrap().revision;
+        let op = json!({"op": "rippleTrim", "clipId": video, "edge": "end", "delta": -2.0, "ripplePolicy": "selectedTracks"});
+        agent
+            .apply_edit_plan(revision, vec![op], false, true)
+            .unwrap();
+        assert_eq!(clip(&video).duration, 8.0);
+        assert_eq!(
+            clip(&audio).duration,
+            8.0,
+            "linked audio is trimmed with its video"
+        );
+        assert_eq!(clip(&after).start, 8.0);
+
+        agent.undo().unwrap();
+        let revision = agent.get_state().unwrap().revision;
+        let op = json!({"op": "rippleTrim", "clipId": video, "edge": "end", "delta": -2.0, "linkPolicy": "explicit"});
+        agent
+            .apply_edit_plan(revision, vec![op], false, true)
+            .unwrap();
+        assert_eq!(
+            clip(&audio).duration,
+            10.0,
+            "explicit leaves the partner alone"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

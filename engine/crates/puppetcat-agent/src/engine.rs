@@ -10,11 +10,15 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+use puppetcat_core::frame::Frame;
 use puppetcat_host::{Slot, SlotLock};
 use puppetcat_media::ReaderPool;
 use puppetcat_project::Command;
+use puppetcat_project::model::ClipKind;
 
+use crate::analysis::{self, AudioAnalysis, FeatureBucket};
 use crate::export::{ExportJob, ExportStatus};
+use crate::query::{self, TimelineSummary, ValidationReport};
 
 /// A session plus the cross-process claim that makes it safe to edit: for as
 /// long as this exists, no `puppetcat` window will accept input on the same
@@ -186,6 +190,339 @@ impl AgentEngine {
         })
     }
 
+    /// Adds standard black bookends without asking the caller to manufacture
+    /// media or coordinate clips and markers. The generated one-pixel PNG is
+    /// project-owned and reused on subsequent calls; the timeline mutation
+    /// itself is one command and therefore one undo step.
+    pub fn add_fade_to_black(
+        &self,
+        track_id: Option<String>,
+        duration: f64,
+        transition_duration: f64,
+        shift_all_tracks: bool,
+        shift_free_markers: bool,
+    ) -> Result<puppetcat_host::EditorView, String> {
+        let mut guard = self.session_lock();
+        let session = guard.as_mut().ok_or_else(no_project)?;
+
+        let generated = Path::new(session.path()).join(".puppetcat-generated");
+        std::fs::create_dir_all(&generated)
+            .map_err(|error| format!("could not create {}: {error}", generated.display()))?;
+        let black = generated.join("solid-000000.png");
+        if !black.exists() {
+            let frame = Frame::from_rgba(1, 1, vec![0, 0, 0, 255])
+                .ok_or_else(|| "could not create the black generator frame".to_owned())?;
+            let bytes = puppetcat_media::png(&frame).map_err(|error| error.to_string())?;
+            let partial = generated.join(".solid-000000.png.part");
+            std::fs::write(&partial, bytes)
+                .map_err(|error| format!("could not write {}: {error}", partial.display()))?;
+            std::fs::rename(&partial, &black)
+                .map_err(|error| format!("could not install {}: {error}", black.display()))?;
+        }
+        let path = black.to_string_lossy().into_owned();
+        if !session.project().media.iter().any(|item| item.path == path) {
+            let summary = puppetcat_host::media::probe(&path)?;
+            session
+                .apply(Command::AddMedia {
+                    item: summary.to_new_media(),
+                })
+                .map_err(|error| error.to_string())?;
+        }
+        let media_id = session
+            .project()
+            .media
+            .iter()
+            .find(|item| item.path == path)
+            .map(|item| item.id.clone())
+            .ok_or_else(|| "the generated black media did not enter the bin".to_owned())?;
+        let track_id = match track_id {
+            Some(id) => id,
+            None => {
+                let timeline = session.project().active();
+                timeline
+                    .clips
+                    .iter()
+                    .filter(|clip| {
+                        matches!(clip.kind, ClipKind::Video | ClipKind::Image)
+                            && timeline
+                                .track(&clip.track_id)
+                                .is_some_and(|track| track.visible)
+                    })
+                    .min_by(|left, right| {
+                        left.start
+                            .total_cmp(&right.start)
+                            .then_with(|| right.duration.total_cmp(&left.duration))
+                    })
+                    .map(|clip| clip.track_id.clone())
+                    .ok_or_else(|| "the active timeline has no visible video clip".to_owned())?
+            }
+        };
+        session
+            .apply(Command::AddFadeToBlack {
+                media_id,
+                track_id,
+                duration,
+                transition_duration,
+                shift_all_tracks,
+                shift_free_markers,
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(session.view())
+    }
+
+    /// Analyses one bin item, one timeline clip, or the active timeline's
+    /// audible mix. Times are source-local for a media item and timeline
+    /// times for clip/timeline targets.
+    #[allow(clippy::too_many_arguments)]
+    pub fn analyze_audio(
+        &self,
+        media_id: Option<String>,
+        clip_id: Option<String>,
+        start: Option<f64>,
+        end: Option<f64>,
+        bucket_seconds: f64,
+        silence_threshold_db: f64,
+        min_silence: f64,
+        include_buckets: bool,
+    ) -> Result<AudioAnalysis, String> {
+        if media_id.is_some() && clip_id.is_some() {
+            return Err("choose mediaId or clipId, not both".to_owned());
+        }
+
+        #[derive(Clone)]
+        struct Source {
+            path: String,
+            source_start: f64,
+            source_duration: f64,
+            timeline_start: f64,
+            speed: f64,
+            volume: f64,
+            has_filters: bool,
+            curved_speed: bool,
+        }
+
+        let (target, origin, target_end, sources) = {
+            let guard = self.session_lock();
+            let session = guard.as_ref().ok_or_else(no_project)?;
+            let project = session.project();
+            let timeline = project.active();
+            if let Some(id) = media_id {
+                let media = project
+                    .media_by_id(&id)
+                    .ok_or_else(|| format!("media {id:?} is not in the bin"))?;
+                if !media.has_audio {
+                    return Err(format!("media {id:?} has no audio stream"));
+                }
+                let origin = start.unwrap_or(0.0).max(0.0);
+                let target_end = end.or(media.duration).unwrap_or(origin).max(origin);
+                (
+                    format!("media:{id}"),
+                    origin,
+                    target_end,
+                    vec![Source {
+                        path: media.path.clone(),
+                        source_start: origin,
+                        source_duration: target_end - origin,
+                        timeline_start: origin,
+                        speed: 1.0,
+                        volume: 1.0,
+                        has_filters: false,
+                        curved_speed: false,
+                    }],
+                )
+            } else if let Some(id) = clip_id {
+                let clip = timeline
+                    .clip(&id)
+                    .ok_or_else(|| format!("clip {id:?} is not on the active timeline"))?;
+                let media = project
+                    .media_by_id(&clip.media_id)
+                    .ok_or_else(|| format!("clip {id:?} has no media"))?;
+                if !media.has_audio || clip.muted == Some(true) {
+                    return Err(format!("clip {id:?} has no audible stream"));
+                }
+                let origin = start.unwrap_or(clip.start).max(clip.start);
+                let target_end = end
+                    .unwrap_or(clip.start + clip.duration)
+                    .min(clip.start + clip.duration)
+                    .max(origin);
+                let speed = clip.speed.max(0.0625);
+                (
+                    format!("clip:{id}"),
+                    origin,
+                    target_end,
+                    vec![Source {
+                        path: media.path.clone(),
+                        source_start: clip.source_start + (origin - clip.start) * speed,
+                        source_duration: (target_end - origin) * speed,
+                        timeline_start: origin,
+                        speed,
+                        volume: clip.volume,
+                        has_filters: !clip.filters.is_empty(),
+                        curved_speed: clip.speed_curve.is_some(),
+                    }],
+                )
+            } else {
+                let origin = start.unwrap_or(0.0).max(0.0);
+                let target_end = end.unwrap_or_else(|| timeline.duration()).max(origin);
+                let mut sources = Vec::new();
+                for clip in &timeline.clips {
+                    if !matches!(clip.kind, ClipKind::Video | ClipKind::Audio) {
+                        continue;
+                    }
+                    let Some(track) = timeline.track(&clip.track_id) else {
+                        continue;
+                    };
+                    let Some(media) = project.media_by_id(&clip.media_id) else {
+                        continue;
+                    };
+                    if track.muted || clip.muted == Some(true) || !media.has_audio {
+                        continue;
+                    }
+                    let from = clip.start.max(origin);
+                    let to = (clip.start + clip.duration).min(target_end);
+                    if to <= from {
+                        continue;
+                    }
+                    let speed = clip.speed.max(0.0625);
+                    sources.push(Source {
+                        path: media.path.clone(),
+                        source_start: clip.source_start + (from - clip.start) * speed,
+                        source_duration: (to - from) * speed,
+                        timeline_start: from,
+                        speed,
+                        volume: clip.volume,
+                        has_filters: !clip.filters.is_empty(),
+                        curved_speed: clip.speed_curve.is_some(),
+                    });
+                }
+                ("timeline:active".to_owned(), origin, target_end, sources)
+            }
+        };
+
+        let count = ((target_end - origin) / bucket_seconds.max(0.02)).ceil() as usize;
+        let count = count.max(1);
+        let mut power = vec![0.0f64; count];
+        let mut peak = vec![0.0f64; count];
+        let mut zcr_power = vec![0.0f64; count];
+        let mut warnings = Vec::new();
+        for source in sources {
+            if source.has_filters {
+                warnings.push(format!(
+                    "{} has audio filters; analysis uses the decoded source before those filters",
+                    source.path
+                ));
+            }
+            if source.curved_speed {
+                warnings.push(format!(
+                    "{} has a speed curve; analysis maps it using the clip's mean speed",
+                    source.path
+                ));
+            }
+            let decoded = analysis::analyze_file(
+                Path::new(&source.path),
+                source.source_start,
+                Some(source.source_duration),
+                bucket_seconds * source.speed,
+            )?;
+            for bucket in decoded {
+                let at = source.timeline_start + bucket.start / source.speed;
+                if at < origin || at >= target_end {
+                    continue;
+                }
+                let index = ((at - origin) / bucket_seconds.max(0.02)).floor() as usize;
+                if index >= count {
+                    continue;
+                }
+                let contribution = bucket.rms * source.volume.max(0.0);
+                let squared = contribution * contribution;
+                power[index] += squared;
+                peak[index] = peak[index].max(bucket.peak * source.volume.max(0.0));
+                zcr_power[index] += bucket.zcr * squared;
+            }
+        }
+        let width = bucket_seconds.clamp(0.02, 2.0);
+        let features: Vec<FeatureBucket> = (0..count)
+            .map(|index| {
+                let start = index as f64 * width;
+                let end = ((index + 1) as f64 * width).min(target_end - origin);
+                FeatureBucket {
+                    start,
+                    end,
+                    rms: power[index].sqrt().min(1.0),
+                    peak: peak[index].min(1.0),
+                    zcr: if power[index] > 0.0 {
+                        zcr_power[index] / power[index]
+                    } else {
+                        0.0
+                    },
+                }
+            })
+            .collect();
+        warnings.sort();
+        warnings.dedup();
+        Ok(analysis::summarize(
+            target,
+            origin,
+            features,
+            width,
+            silence_threshold_db,
+            min_silence,
+            include_buckets,
+            warnings,
+        ))
+    }
+
+    /// Returns a compact, optionally filtered summary of one timeline.
+    #[allow(clippy::too_many_arguments)]
+    pub fn timeline_summary(
+        &self,
+        timeline_id: Option<&str>,
+        include_clips: bool,
+        include_markers: bool,
+        track_id: Option<&str>,
+        start: Option<f64>,
+        end: Option<f64>,
+        limit: usize,
+    ) -> Result<TimelineSummary, String> {
+        let guard = self.session_lock();
+        let session = guard.as_ref().ok_or_else(no_project)?;
+        query::timeline_summary(
+            session.project(),
+            timeline_id,
+            include_clips,
+            include_markers,
+            track_id,
+            start,
+            end,
+            limit,
+        )
+    }
+
+    /// Looks up one clip without serializing the whole project.
+    pub fn get_clip(
+        &self,
+        clip_id: &str,
+        timeline_id: Option<&str>,
+    ) -> Result<puppetcat_project::model::Clip, String> {
+        let guard = self.session_lock();
+        let session = guard.as_ref().ok_or_else(no_project)?;
+        query::clip(session.project(), clip_id, timeline_id)
+    }
+
+    /// Looks up one media-bin item without serializing the whole project.
+    pub fn get_media(&self, media_id: &str) -> Result<puppetcat_project::model::MediaItem, String> {
+        let guard = self.session_lock();
+        let session = guard.as_ref().ok_or_else(no_project)?;
+        query::media(session.project(), media_id)
+    }
+
+    /// Checks project references, times, files, transitions, and markers.
+    pub fn validate_timeline(&self, timeline_id: Option<&str>) -> Result<ValidationReport, String> {
+        let guard = self.session_lock();
+        let session = guard.as_ref().ok_or_else(no_project)?;
+        query::validate(session.project(), timeline_id)
+    }
+
     /// Renders the active session at `time` to PNG bytes - the "see the
     /// timeline" capability the window has and an agent otherwise wouldn't.
     pub fn render_snapshot(
@@ -197,6 +534,35 @@ impl AgentEngine {
         let guard = self.session_lock();
         let session = guard.as_ref().ok_or_else(no_project)?;
         crate::snapshot::render_still(session, &self.titles, &self.pool, time, width, height)
+    }
+
+    /// Renders several instants with the same preview path as exports and
+    /// combines them into one image. Optional paths let callers persist the
+    /// contact sheet and each full-resolution source frame without shelling
+    /// out to image utilities.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_contact_sheet(
+        &self,
+        times: Vec<f64>,
+        width: Option<u32>,
+        height: Option<u32>,
+        columns: Option<u32>,
+        output: Option<String>,
+        frames_output_dir: Option<String>,
+    ) -> Result<crate::snapshot::ContactSheet, String> {
+        let guard = self.session_lock();
+        let session = guard.as_ref().ok_or_else(no_project)?;
+        crate::snapshot::render_contact_sheet(
+            session,
+            &self.titles,
+            &self.pool,
+            &times,
+            width,
+            height,
+            columns,
+            output.as_deref().map(Path::new),
+            frames_output_dir.as_deref().map(Path::new),
+        )
     }
 
     /// Starts exporting the active session. Errs immediately if one is

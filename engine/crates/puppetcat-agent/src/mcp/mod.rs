@@ -87,6 +87,94 @@ pub struct ImportMediaParams {
     pub path: String,
 }
 
+/// Parameters for `add_fade_to_black`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AddFadeToBlackParams {
+    /// Visual track to bookend. Omit to choose the earliest visible video
+    /// track automatically.
+    pub track_id: Option<String>,
+    /// Seconds of black at each end. Defaults to one second.
+    pub duration: Option<f64>,
+    /// Seconds of cross-fade at each cut. Defaults to half a second.
+    pub transition_duration: Option<f64>,
+    /// Preserve sync by shifting every lane. Defaults to true.
+    pub shift_all_tracks: Option<bool>,
+    /// Move free markers with the content. Attached markers always follow
+    /// their clips. Defaults to true.
+    pub shift_free_markers: Option<bool>,
+}
+
+/// Parameters for `analyze_audio`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyzeAudioParams {
+    /// Analyze this bin item. Omit with `clipId` to analyze the active
+    /// timeline's audible mix.
+    pub media_id: Option<String>,
+    /// Analyze this active-timeline clip. Mutually exclusive with `mediaId`.
+    pub clip_id: Option<String>,
+    /// Beginning in target coordinates: source seconds for media, timeline
+    /// seconds for a clip or timeline.
+    pub start: Option<f64>,
+    /// Exclusive end in the same coordinates as `start`.
+    pub end: Option<f64>,
+    /// Analysis resolution in milliseconds, 20..=2000. Defaults to 100.
+    pub bucket_ms: Option<u32>,
+    /// Buckets at or below this RMS dBFS count as silence. Defaults to -35.
+    pub silence_threshold_db: Option<f64>,
+    /// Drop silence runs shorter than this many seconds. Defaults to one.
+    pub min_silence: Option<f64>,
+    /// Include every analysis bucket. False by default to keep results small.
+    pub include_buckets: Option<bool>,
+}
+
+/// Filters and inclusion controls for a compact timeline summary.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineSummaryParams {
+    /// Timeline id; omit for the active timeline.
+    pub timeline_id: Option<String>,
+    /// Include matching clips, sorted by start. Defaults to false.
+    pub include_clips: Option<bool>,
+    /// Include markers. Defaults to false.
+    pub include_markers: Option<bool>,
+    /// Restrict clips and track summaries to this track.
+    pub track_id: Option<String>,
+    /// Restrict clips to those intersecting this time or later.
+    pub start: Option<f64>,
+    /// Restrict clips to those starting before this time.
+    pub end: Option<f64>,
+    /// Maximum clips and markers returned, 1..=1000. Defaults to 200.
+    pub limit: Option<usize>,
+}
+
+/// Selects one clip for structured lookup.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GetClipParams {
+    /// Clip identifier.
+    pub clip_id: String,
+    /// Search only this timeline; omit to search the whole project.
+    pub timeline_id: Option<String>,
+}
+
+/// Selects one media-bin item for structured lookup.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GetMediaParams {
+    /// Media identifier.
+    pub media_id: String,
+}
+
+/// Scope for project invariant validation.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateTimelineParams {
+    /// Validate only this timeline; omit to validate the whole project.
+    pub timeline_id: Option<String>,
+}
+
 /// Parameters for `add_clip`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -307,6 +395,24 @@ pub struct RenderSnapshotParams {
     pub height: Option<u32>,
 }
 
+/// Parameters for `render_contact_sheet`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderContactSheetParams {
+    /// Timeline instants to render, in seconds, in cell order. Limited to 64.
+    pub times: Vec<f64>,
+    /// Width of every frame. Omit to use the project width.
+    pub width: Option<u32>,
+    /// Height of every frame. Omit to use the project height.
+    pub height: Option<u32>,
+    /// Number of columns. Omit for an approximately square grid.
+    pub columns: Option<u32>,
+    /// Optional PNG path where the composed sheet is written atomically.
+    pub output: Option<String>,
+    /// Optional directory receiving every rendered frame as its own PNG.
+    pub frames_output_dir: Option<String>,
+}
+
 /// Parameters for `start_export`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -426,6 +532,91 @@ impl ConcatAgentServer {
             .and_then(|view| ok_json(&view))
     }
 
+    #[tool(
+        description = "Analyze a media item, one clip, or the active timeline's audible mix without external ffmpeg commands. Returns loudness, silence/dead-air intervals, activity, and explicitly heuristic speech/music likelihoods. Omit mediaId and clipId for the composed timeline."
+    )]
+    async fn analyze_audio(
+        &self,
+        Parameters(params): Parameters<AnalyzeAudioParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let engine = self.engine.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            engine.analyze_audio(
+                params.media_id,
+                params.clip_id,
+                params.start,
+                params.end,
+                f64::from(params.bucket_ms.unwrap_or(100).clamp(20, 2000)) / 1000.0,
+                params
+                    .silence_threshold_db
+                    .unwrap_or(-35.0)
+                    .clamp(-120.0, 0.0),
+                params.min_silence.unwrap_or(1.0).max(0.0),
+                params.include_buckets.unwrap_or(false),
+            )
+        })
+        .await
+        .map_err(|error| to_mcp_err(format!("audio analysis task panicked: {error}")))?
+        .map_err(to_mcp_err)?;
+        ok_json(&result)
+    }
+
+    #[tool(
+        description = "Return a compact active-or-named timeline summary with optional filtered clips and markers. Prefer this over get_state when the whole project is unnecessary."
+    )]
+    fn get_timeline_summary(
+        &self,
+        Parameters(params): Parameters<TimelineSummaryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = self.engine.timeline_summary(
+            params.timeline_id.as_deref(),
+            params.include_clips.unwrap_or(false),
+            params.include_markers.unwrap_or(false),
+            params.track_id.as_deref(),
+            params.start,
+            params.end,
+            params.limit.unwrap_or(200).clamp(1, 1000),
+        );
+        result.map_err(to_mcp_err).and_then(|value| ok_json(&value))
+    }
+
+    #[tool(description = "Return one clip by id without returning the rest of the project.")]
+    fn get_clip(
+        &self,
+        Parameters(params): Parameters<GetClipParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .get_clip(&params.clip_id, params.timeline_id.as_deref())
+            .map_err(to_mcp_err)
+            .and_then(|value| ok_json(&value))
+    }
+
+    #[tool(
+        description = "Return one media-bin item by id without returning the rest of the project."
+    )]
+    fn get_media(
+        &self,
+        Parameters(params): Parameters<GetMediaParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .get_media(&params.media_id)
+            .map_err(to_mcp_err)
+            .and_then(|value| ok_json(&value))
+    }
+
+    #[tool(
+        description = "Validate project/timeline invariants and return structured errors and warnings for missing references, invalid times, missing files, and bad transitions."
+    )]
+    fn validate_timeline(
+        &self,
+        Parameters(params): Parameters<ValidateTimelineParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .validate_timeline(params.timeline_id.as_deref())
+            .map_err(to_mcp_err)
+            .and_then(|value| ok_json(&value))
+    }
+
     // ── media ──
 
     #[tool(
@@ -436,6 +627,22 @@ impl ConcatAgentServer {
         Parameters(params): Parameters<ImportMediaParams>,
     ) -> Result<CallToolResult, McpError> {
         ok_state(self.engine.import_media(&params.path))
+    }
+
+    #[tool(
+        description = "Add standard fade-from-black and fade-to-black bookends as one workflow. PuppetCat creates and reuses its own black generator asset, shifts synchronized lanes and markers by policy, places both bookends, and applies cross-fades. Repeating the call is a no-op when the track already has these bookends."
+    )]
+    fn add_fade_to_black(
+        &self,
+        Parameters(params): Parameters<AddFadeToBlackParams>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_state(self.engine.add_fade_to_black(
+            params.track_id,
+            params.duration.unwrap_or(1.0),
+            params.transition_duration.unwrap_or(0.5),
+            params.shift_all_tracks.unwrap_or(true),
+            params.shift_free_markers.unwrap_or(true),
+        ))
     }
 
     // ── clip placement ──
@@ -719,6 +926,35 @@ impl ConcatAgentServer {
             encoded,
             "image/png",
         )]))
+    }
+
+    #[tool(
+        description = "Render up to 64 timeline instants through the exact preview/export compositor. Returns a PNG contact sheet plus cell/time metadata and visual-change scores. Optionally writes the sheet and every full-resolution frame to explicit paths."
+    )]
+    async fn render_contact_sheet(
+        &self,
+        Parameters(params): Parameters<RenderContactSheetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let engine = self.engine.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            engine.render_contact_sheet(
+                params.times,
+                params.width,
+                params.height,
+                params.columns,
+                params.output,
+                params.frames_output_dir,
+            )
+        })
+        .await
+        .map_err(|error| to_mcp_err(format!("contact-sheet task panicked: {error}")))?
+        .map_err(to_mcp_err)?;
+        let metadata = serde_json::to_string(&result.metadata())
+            .map_err(|error| to_mcp_err(error.to_string()))?;
+        Ok(CallToolResult::success(vec![
+            ContentBlock::image(STANDARD.encode(result.png), "image/png"),
+            ContentBlock::text(metadata),
+        ]))
     }
 
     // ── export ──

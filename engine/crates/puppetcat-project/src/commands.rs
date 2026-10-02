@@ -244,6 +244,25 @@ pub enum Command {
         /// Timeline position in seconds, floored at 0.
         start: f64,
     },
+    /// Adds the conventional fade-from-black and fade-to-black bookends in
+    /// one edit. `media_id` names an agent-managed black still (or video),
+    /// all selected clips move forward to make room, free markers follow by
+    /// policy, and both cuts receive a cross-fade transition.
+    AddFadeToBlack {
+        /// Black media already present in the bin.
+        media_id: String,
+        /// The visual lane whose first and last clips receive the fades.
+        track_id: String,
+        /// Length of each black bookend and the amount shifted at the head.
+        duration: f64,
+        /// Length of each cross-fade.
+        transition_duration: f64,
+        /// Shift every lane to preserve sync; false shifts only `track_id`.
+        shift_all_tracks: bool,
+        /// Move free-floating markers with the edit. Attached markers always
+        /// follow their clips.
+        shift_free_markers: bool,
+    },
     /// Places a title: a clip with no media behind it, named after the
     /// text's first line, minting a "c" id.
     AddTextClip {
@@ -543,6 +562,12 @@ pub enum CommandError {
     /// A first-free-track placement found a timeline with no tracks at all.
     #[error("There are no tracks.")]
     NoTracks,
+    /// [`Command::AddFadeToBlack`] found no content to bookend.
+    #[error("That track has no clips to fade.")]
+    FadeTrackEmpty,
+    /// A fade workflow cannot safely guess what a leading timeline gap means.
+    #[error("The first clip on that track must start at the beginning of the timeline.")]
+    FadeTrackDoesNotStartAtZero,
     /// [`Command::MergeClips`] was refused, for whichever [`why_not_merge`]
     /// reason applied.
     #[error("{reason}")]
@@ -974,6 +999,94 @@ fn apply_command(
                 .push(default_clip(id.clone(), track_id, &media, start));
             Ok(Outcome {
                 created_id: Some(id),
+                applied: true,
+            })
+        }
+
+        Command::AddFadeToBlack {
+            media_id,
+            track_id,
+            duration,
+            transition_duration,
+            shift_all_tracks,
+            shift_free_markers,
+        } => {
+            let media = project
+                .media_by_id(&media_id)
+                .ok_or(CommandError::MediaGone)?
+                .clone();
+            if media.kind == MediaKind::Audio {
+                return Err(CommandError::MediaGone);
+            }
+            let timeline = project.active_mut();
+            if timeline.track(&track_id).is_none() {
+                return Err(CommandError::TrackGone);
+            }
+            if timeline.clips.iter().any(|clip| {
+                clip.track_id == track_id
+                    && (clip.name == "Fade from Black" || clip.name == "Fade to Black")
+            }) {
+                return Ok(Outcome::default());
+            }
+
+            let mut content: Vec<(String, f64, f64)> = timeline
+                .clips
+                .iter()
+                .filter(|clip| clip.track_id == track_id)
+                .map(|clip| (clip.id.clone(), clip.start, clip.duration))
+                .collect();
+            if content.is_empty() {
+                return Err(CommandError::FadeTrackEmpty);
+            }
+            content.sort_by(|left, right| left.1.total_cmp(&right.1));
+            if content[0].1.abs() > JOIN_EPSILON {
+                return Err(CommandError::FadeTrackDoesNotStartAtZero);
+            }
+
+            let duration = duration.max(MIN_CLIP_DURATION);
+            let transition_duration = transition_duration.max(0.0).min(duration).min(content[0].2);
+            let first_id = content[0].0.clone();
+            let content_end = content
+                .iter()
+                .map(|(_, start, length)| start + length)
+                .fold(0.0, f64::max);
+
+            for clip in &mut timeline.clips {
+                if shift_all_tracks || clip.track_id == track_id {
+                    clip.start += duration;
+                }
+            }
+            if shift_free_markers {
+                for marker in &mut timeline.markers {
+                    if marker.clip_id.is_none() {
+                        marker.time += duration;
+                    }
+                }
+            }
+
+            let mut intro = default_clip(mint.next("c"), track_id.clone(), &media, 0.0);
+            intro.name = "Fade from Black".to_owned();
+            intro.duration = duration;
+            intro.volume = 0.0;
+            let mut outro = default_clip(mint.next("c"), track_id, &media, content_end + duration);
+            outro.name = "Fade to Black".to_owned();
+            outro.duration = duration;
+            outro.volume = 0.0;
+            outro.transition_in = Some(Transition {
+                id: "cross-fade".to_owned(),
+                duration: transition_duration,
+            });
+            let outro_id = outro.id.clone();
+            timeline.clips.push(intro);
+            timeline.clips.push(outro);
+            if let Some(first) = timeline.clip_mut(&first_id) {
+                first.transition_in = Some(Transition {
+                    id: "cross-fade".to_owned(),
+                    duration: transition_duration,
+                });
+            }
+            Ok(Outcome {
+                created_id: Some(outro_id),
                 applied: true,
             })
         }

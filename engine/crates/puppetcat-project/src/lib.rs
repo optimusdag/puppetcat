@@ -108,6 +108,113 @@ mod tests {
     }
 
     #[test]
+    fn fade_bookends_shift_synced_content_and_markers_in_one_edit() {
+        let (mut editor, _, clip_id) = fixture();
+        let black_id = editor
+            .apply(Command::AddMedia {
+                item: crate::commands::NewMedia {
+                    path: "/generated/black.png".to_owned(),
+                    name: "black.png".to_owned(),
+                    duration: None,
+                    kind: MediaKind::Image,
+                    width: Some(1),
+                    height: Some(1),
+                    frame_rate: None,
+                    frame_rate_fraction: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    has_audio: false,
+                },
+            })
+            .expect("adds black")
+            .created_id
+            .expect("media id");
+        let track_id = editor.project().active().tracks[0].id.clone();
+        editor
+            .apply(Command::AddMarker {
+                time: 2.0,
+                name: Some("attached".to_owned()),
+                clip_id: Some(clip_id.clone()),
+            })
+            .expect("attached marker");
+        editor
+            .apply(Command::AddMarker {
+                time: 4.0,
+                name: Some("free".to_owned()),
+                clip_id: None,
+            })
+            .expect("free marker");
+
+        editor
+            .apply(Command::AddFadeToBlack {
+                media_id: black_id,
+                track_id,
+                duration: 1.0,
+                transition_duration: 0.5,
+                shift_all_tracks: true,
+                shift_free_markers: true,
+            })
+            .expect("adds fades");
+
+        let timeline = editor.project().active();
+        assert_eq!(timeline.clips.len(), 3);
+        let content = timeline.clip(&clip_id).expect("content remains");
+        assert_eq!(content.start, 1.0);
+        assert_eq!(content.transition_in.as_ref().unwrap().id, "cross-fade");
+        let intro = timeline
+            .clips
+            .iter()
+            .find(|clip| clip.name == "Fade from Black")
+            .expect("intro");
+        let outro = timeline
+            .clips
+            .iter()
+            .find(|clip| clip.name == "Fade to Black")
+            .expect("outro");
+        assert_eq!((intro.start, intro.duration), (0.0, 1.0));
+        assert_eq!((outro.start, outro.duration), (11.0, 1.0));
+        assert_eq!(outro.transition_in.as_ref().unwrap().duration, 0.5);
+        assert_eq!(timeline.markers[0].time, 3.0, "attached follows clip");
+        assert_eq!(timeline.markers[1].time, 5.0, "free marker follows policy");
+    }
+
+    #[test]
+    fn fade_bookends_are_idempotent() {
+        let (mut editor, _, _) = fixture();
+        let black_id = editor
+            .apply(Command::AddMedia {
+                item: crate::commands::NewMedia {
+                    path: "/generated/black.png".to_owned(),
+                    name: "black.png".to_owned(),
+                    duration: None,
+                    kind: MediaKind::Image,
+                    width: Some(1),
+                    height: Some(1),
+                    frame_rate: None,
+                    frame_rate_fraction: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    has_audio: false,
+                },
+            })
+            .expect("adds black")
+            .created_id
+            .unwrap();
+        let track_id = editor.project().active().tracks[0].id.clone();
+        let command = Command::AddFadeToBlack {
+            media_id: black_id,
+            track_id,
+            duration: 1.0,
+            transition_duration: 0.5,
+            shift_all_tracks: true,
+            shift_free_markers: true,
+        };
+        assert!(editor.apply(command.clone()).unwrap().applied);
+        assert!(!editor.apply(command).unwrap().applied);
+        assert_eq!(editor.project().active().clips.len(), 3);
+    }
+
+    #[test]
     fn split_produces_source_continuous_halves_and_merge_rejoins_them() {
         let (mut editor, _, clip_id) = fixture();
         editor

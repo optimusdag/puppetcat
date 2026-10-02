@@ -9,8 +9,8 @@ use std::ffi::CStr;
 use std::path::Path;
 use std::sync::Once;
 
-use puppetcat_core::time::Rational;
 use ffmpeg_the_third as ffmpeg;
+use puppetcat_core::time::Rational;
 
 use crate::error::Error;
 

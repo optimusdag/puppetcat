@@ -87,7 +87,8 @@ impl AgentEngine {
         rate_num: i64,
         rate_den: i64,
     ) -> Result<puppetcat_host::ProjectInfo, String> {
-        let info = puppetcat_host::projects::create(location, name, width, height, rate_num, rate_den)?;
+        let info =
+            puppetcat_host::projects::create(location, name, width, height, rate_num, rate_den)?;
         self.open_session(&info)?;
         Ok(info)
     }
@@ -268,9 +269,8 @@ impl ExportRangeArgs {
         timeline: &puppetcat_project::model::Timeline,
     ) -> Result<Option<(f64, f64)>, String> {
         let marker_time = |key: &str| -> Result<f64, String> {
-            let matches = |marker: &&puppetcat_project::model::Marker| {
-                marker.id == key || marker.name == key
-            };
+            let matches =
+                |marker: &&puppetcat_project::model::Marker| marker.id == key || marker.name == key;
             timeline
                 .markers
                 .iter()
@@ -339,9 +339,21 @@ mod tests {
             args(Some(1.0), None, None, Some("mk2")).resolve(timeline),
             Ok(Some((1.0, 8.0)))
         );
-        assert!(args(None, None, Some("nope"), None).resolve(timeline).is_err());
-        assert!(args(Some(1.0), None, Some("mk1"), None).resolve(timeline).is_err());
-        assert!(args(Some(5.0), Some(5.0), None, None).resolve(timeline).is_err());
+        assert!(
+            args(None, None, Some("nope"), None)
+                .resolve(timeline)
+                .is_err()
+        );
+        assert!(
+            args(Some(1.0), None, Some("mk1"), None)
+                .resolve(timeline)
+                .is_err()
+        );
+        assert!(
+            args(Some(5.0), Some(5.0), None, None)
+                .resolve(timeline)
+                .is_err()
+        );
     }
 
     /// A scratch root for one test: a project location and, critically, its

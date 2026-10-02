@@ -124,10 +124,10 @@ pub const START_RATES: [(&str, i64, i64); 5] = [
 /// after clicking one, the two segmented controls read back exactly what it
 /// chose and can still be adjusted by hand.
 pub const PLATFORM_PRESETS: [(&str, usize, usize); 4] = [
-    ("YouTube", 0, 3),         // 1920x1080, 30 fps
-    ("TikTok / Reels", 3, 3),  // 1080x1920, 30 fps
-    ("Instagram", 4, 3),       // 1080x1080, 30 fps
-    ("4K", 2, 3),              // 3840x2160, 30 fps
+    ("YouTube", 0, 3),        // 1920x1080, 30 fps
+    ("TikTok / Reels", 3, 3), // 1080x1920, 30 fps
+    ("Instagram", 4, 3),      // 1080x1080, 30 fps
+    ("4K", 2, 3),             // 3840x2160, 30 fps
 ];
 
 /// The interface's languages, as Settings > General lists them. One, until
@@ -3591,7 +3591,8 @@ impl Studio {
             ExportRangeMode::Markers => {
                 let markers = self.export_markers();
                 let at = |index: usize| markers.get(index).map(|marker| marker.1);
-                let (Some(from), Some(to)) = (at(self.export.marker_from), at(self.export.marker_to))
+                let (Some(from), Some(to)) =
+                    (at(self.export.marker_from), at(self.export.marker_to))
                 else {
                     return Err("Add at least two markers to export between them".into());
                 };
@@ -4301,7 +4302,9 @@ impl Studio {
             .unwrap_or(0);
         editor.set_timeline_current_tab(active as i32);
         editor.set_playhead(self.playhead);
-        let (range_start, range_end) = self.range.map_or((-1.0, -1.0), |(start, end)| (start as f32, end as f32));
+        let (range_start, range_end) = self
+            .range
+            .map_or((-1.0, -1.0), |(start, end)| (start as f32, end as f32));
         editor.set_range_start(range_start);
         editor.set_range_end(range_end);
         editor.set_scroll_left(self.scroll_left);
@@ -4398,7 +4401,10 @@ impl Studio {
                     .unwrap_or(puppetcat_project::speed::PRESETS.len() as i32),
             },
             reverse: clip.reverse,
-            anim_in: slot_index(puppetcat_project::model::AnimationSlot::In, &clip.animation_in),
+            anim_in: slot_index(
+                puppetcat_project::model::AnimationSlot::In,
+                &clip.animation_in,
+            ),
             anim_out: slot_index(
                 puppetcat_project::model::AnimationSlot::Out,
                 &clip.animation_out,
@@ -4612,7 +4618,11 @@ impl Studio {
             self.export_markers()
                 .into_iter()
                 .map(|(name, time)| {
-                    let name = if name.is_empty() { "Marker".to_owned() } else { name };
+                    let name = if name.is_empty() {
+                        "Marker".to_owned()
+                    } else {
+                        name
+                    };
                     SharedString::from(format!("{name} · {}", clock(time)))
                 })
                 .collect::<Vec<_>>(),
@@ -4633,8 +4643,17 @@ impl Studio {
                 format!("{} installed · {on_disk:.0} MB on disk", installed.len()).into()
             },
             version: env!("CARGO_PKG_VERSION").into(),
-            engine: format!("concat-engine · FFmpeg {}", puppetcat_media::linked_version()).into(),
-            temp_export_folder: self.prefs.temp_export_folder.clone().unwrap_or_default().into(),
+            engine: format!(
+                "concat-engine · FFmpeg {}",
+                puppetcat_media::linked_version()
+            )
+            .into(),
+            temp_export_folder: self
+                .prefs
+                .temp_export_folder
+                .clone()
+                .unwrap_or_default()
+                .into(),
         });
         sync(&models.transcribers, Self::model_rows(&self.transcribers));
         sync(&models.voices, Self::model_rows(&self.voices));
@@ -4716,9 +4735,7 @@ impl Studio {
             range_start_text: self.export.custom_start.as_str().into(),
             range_end_text: self.export.custom_end.as_str().into(),
             range_note: match self.export_range() {
-                Ok(Some((start, end))) => {
-                    format!("{} – {}", clock(start), clock(end)).into()
-                }
+                Ok(Some((start, end))) => format!("{} – {}", clock(start), clock(end)).into(),
                 Ok(None) => SharedString::new(),
                 Err(reason) => reason.into(),
             },

@@ -5,13 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
-use puppetcat_core::frame::Frame;
-use puppetcat_core::time::FrameRate;
 use ffmpeg_the_third as ffmpeg;
 use ffmpeg_the_third::codec::encoder;
 use ffmpeg_the_third::format::{self, Pixel};
 use ffmpeg_the_third::software::scaling;
 use ffmpeg_the_third::util::frame::video::Video;
+use puppetcat_core::frame::Frame;
+use puppetcat_core::time::FrameRate;
 
 use crate::error::{Error, Result};
 use crate::ffi;

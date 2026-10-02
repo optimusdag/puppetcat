@@ -5,8 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
-use puppetcat_core::time::{FrameRate, Rational};
 use ffmpeg_the_third as ffmpeg;
+use puppetcat_core::time::{FrameRate, Rational};
 
 use crate::error::{Error, Result};
 use crate::ffi;

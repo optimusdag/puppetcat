@@ -8,8 +8,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use puppetcat_host::export::{ExportClip, ExportSpec, Exporter, Progress, request, run};
 use puppetcat_host::Session;
+use puppetcat_host::export::{ExportClip, ExportSpec, Exporter, Progress, request, run};
 use serde::Serialize;
 
 /// A snapshot of one export's progress, for `get_export_status`.

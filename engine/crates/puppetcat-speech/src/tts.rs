@@ -597,7 +597,8 @@ mod tests {
 
     #[test]
     fn finds_the_onnx_network_by_extension() {
-        let scratch = std::env::temp_dir().join(format!("puppetcat-tts-test-{}", std::process::id()));
+        let scratch =
+            std::env::temp_dir().join(format!("puppetcat-tts-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch).expect("scratch dir");
         assert!(onnx_file(&scratch).is_none());

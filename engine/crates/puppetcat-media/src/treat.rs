@@ -14,11 +14,11 @@
 
 use std::path::Path;
 
-use puppetcat_core::frame::Frame;
 use ffmpeg_the_third as ffmpeg;
 use ffmpeg_the_third::filter;
 use ffmpeg_the_third::format::Pixel;
 use ffmpeg_the_third::util::frame::video::Video;
+use puppetcat_core::frame::Frame;
 
 use crate::error::{Error, Result};
 use crate::ffi;

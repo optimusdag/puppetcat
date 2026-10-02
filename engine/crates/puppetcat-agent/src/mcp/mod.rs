@@ -39,12 +39,13 @@ fn to_mcp_err(message: String) -> McpError {
 /// tool here that isn't `render_snapshot` returns state this way, the same
 /// `EditorView`/`ProjectInfo` JSON shape the window itself reads.
 fn ok_json<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
-    let text =
-        serde_json::to_string(value).map_err(|error| to_mcp_err(error.to_string()))?;
+    let text = serde_json::to_string(value).map_err(|error| to_mcp_err(error.to_string()))?;
     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
 
-fn ok_state(result: Result<puppetcat_host::EditorView, String>) -> Result<CallToolResult, McpError> {
+fn ok_state(
+    result: Result<puppetcat_host::EditorView, String>,
+) -> Result<CallToolResult, McpError> {
     result.map_err(to_mcp_err).and_then(|view| ok_json(&view))
 }
 
@@ -419,7 +420,10 @@ impl ConcatAgentServer {
         description = "The active session's current state: the whole project (timelines, tracks, clips, media), and whether undo/redo are available."
     )]
     fn get_state(&self) -> Result<CallToolResult, McpError> {
-        self.engine.get_state().map_err(to_mcp_err).and_then(|view| ok_json(&view))
+        self.engine
+            .get_state()
+            .map_err(to_mcp_err)
+            .and_then(|view| ok_json(&view))
     }
 
     // ── media ──
@@ -753,13 +757,11 @@ impl ConcatAgentServer {
 #[tool_handler]
 impl ServerHandler for ConcatAgentServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder().enable_tools().build(),
-        )
-        .with_server_info(Implementation::from_build_env())
-        .with_protocol_version(ProtocolVersion::V_2024_11_05)
-        .with_instructions(
-            "Drives a full PuppetCat editing session with no window: create or open a \
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::from_build_env())
+            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+            .with_instructions(
+                "Drives a full PuppetCat editing session with no window: create or open a \
              project, edit its timeline through curated tools or the apply_raw_command \
              escape hatch (which covers every operation), render_snapshot to see the \
              result, and export. One project is open at a time; create_project or \
@@ -771,7 +773,7 @@ impl ServerHandler for ConcatAgentServer {
              set of changes is done, even if the same project will be opened again soon, \
              so the person at the window can resume; save_project alone does not release \
              the claim, only close_project does."
-                .to_owned(),
-        )
+                    .to_owned(),
+            )
     }
 }

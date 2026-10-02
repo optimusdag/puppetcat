@@ -399,8 +399,11 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
                     // An opacity ramp, not a baked filter, so the paused
                     // monitor and the live scrub see the same dissolve the
                     // export does - nothing here needs FFmpeg to be running.
-                    let half =
-                        cut.duration.min(a_duration).min(clips[cut.incoming].duration) / 2.0;
+                    let half = cut
+                        .duration
+                        .min(a_duration)
+                        .min(clips[cut.incoming].duration)
+                        / 2.0;
                     if half < frame {
                         continue;
                     }
@@ -542,7 +545,10 @@ pub fn render(request: &ExportRequest, mut reporter: Reporter<'_>) -> Result<Str
         Some(dir) => {
             let dir = PathBuf::from(dir);
             std::fs::create_dir_all(&dir).map_err(|error| {
-                format!("could not create the scratch folder {}: {error}", dir.display())
+                format!(
+                    "could not create the scratch folder {}: {error}",
+                    dir.display()
+                )
             })?;
             dir
         }
@@ -571,9 +577,8 @@ pub fn render(request: &ExportRequest, mut reporter: Reporter<'_>) -> Result<Str
         )?;
 
         if sound.is_empty() {
-            std::fs::rename(&silent, &render_target).map_err(|error| {
-                format!("could not write {}: {error}", render_target.display())
-            })?;
+            std::fs::rename(&silent, &render_target)
+                .map_err(|error| format!("could not write {}: {error}", render_target.display()))?;
         } else {
             reporter.cancelled()?;
             reporter.emit(0, total_frames, "mixing audio");
@@ -1804,9 +1809,13 @@ mod tests {
         let source_path = dir.join("manual-check-source.mp4");
         let out_path = dir.join("manual-check-out.mp4");
 
-        let Ok(mut enc) =
-            Encoder::create(&black_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
-        else {
+        let Ok(mut enc) = Encoder::create(
+            &black_path,
+            64,
+            64,
+            FrameRate::THIRTY,
+            &EncodeOptions::default(),
+        ) else {
             return; // no ffmpeg here
         };
         for _ in 0..30 {
@@ -1814,9 +1823,14 @@ mod tests {
         }
         enc.finish().expect("finishes");
 
-        let mut enc =
-            Encoder::create(&source_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
-                .expect("ffmpeg is here, just proved it above");
+        let mut enc = Encoder::create(
+            &source_path,
+            64,
+            64,
+            FrameRate::THIRTY,
+            &EncodeOptions::default(),
+        )
+        .expect("ffmpeg is here, just proved it above");
         for i in 0..90 {
             let mut frame = Frame::black(64, 64);
             if i < 12 {
@@ -2073,8 +2087,24 @@ mod tests {
         std::fs::create_dir_all(&root).expect("makes the test folder");
         let source_path = root.join("source.mp4");
         let made = std::process::Command::new("ffmpeg")
-            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=d=3:s=64x64:r=30"])
-            .args(["-f", "lavfi", "-i", "sine=d=3", "-shortest", "-pix_fmt", "yuv420p"])
+            .args([
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=d=3:s=64x64:r=30",
+            ])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=d=3",
+                "-shortest",
+                "-pix_fmt",
+                "yuv420p",
+            ])
             .arg(&source_path)
             .status();
         if !made.is_ok_and(|status| status.success()) {
@@ -2165,9 +2195,13 @@ mod tests {
         let black_path = dir.join("preview-check-black.mp4");
         let source_path = dir.join("preview-check-source.mp4");
 
-        let Ok(mut enc) =
-            Encoder::create(&black_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
-        else {
+        let Ok(mut enc) = Encoder::create(
+            &black_path,
+            64,
+            64,
+            FrameRate::THIRTY,
+            &EncodeOptions::default(),
+        ) else {
             return; // no ffmpeg here
         };
         for _ in 0..30 {
@@ -2175,9 +2209,14 @@ mod tests {
         }
         enc.finish().expect("finishes");
 
-        let mut enc =
-            Encoder::create(&source_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
-                .expect("ffmpeg is here, just proved it above");
+        let mut enc = Encoder::create(
+            &source_path,
+            64,
+            64,
+            FrameRate::THIRTY,
+            &EncodeOptions::default(),
+        )
+        .expect("ffmpeg is here, just proved it above");
         for i in 0..90 {
             let mut frame = Frame::black(64, 64);
             if i < 12 {
@@ -2221,8 +2260,14 @@ mod tests {
         let before = red_at(0.9);
         let middle = red_at(1.1);
         let after = red_at(1.4);
-        assert!(before < 40, "before the dissolve should read black, got {before}");
-        assert!(after > 200, "after the dissolve should read the kept footage, got {after}");
+        assert!(
+            before < 40,
+            "before the dissolve should read black, got {before}"
+        );
+        assert!(
+            after > 200,
+            "after the dissolve should read the kept footage, got {after}"
+        );
         assert!(
             middle > before + 20 && middle < after - 20,
             "the middle of the dissolve should sit between black and full red \
@@ -2256,7 +2301,10 @@ mod tests {
         // 60 frames at 30fps is 2 seconds - well short of a 10-second
         // timeline, exactly the shape a write cut off partway takes.
         let short = verify_mixed_duration(&path, 10.0);
-        assert!(short.is_err(), "a 2s file for a 10s timeline must be rejected");
+        assert!(
+            short.is_err(),
+            "a 2s file for a 10s timeline must be rejected"
+        );
         assert!(
             short.unwrap_err().contains("disk space"),
             "the error should point at the likely cause"
@@ -2431,7 +2479,10 @@ mod tests {
             assert_eq!(clips[1].source_start, 5.0, "never rewinds into the cut");
             assert_eq!(clips[0].video_fade_out, 0.5, "outgoing tail ramps out");
             assert_eq!(clips[1].video_fade_in, 0.5, "incoming head ramps in");
-            assert!(clips[0].transition_chain.is_empty(), "no baked filter needed");
+            assert!(
+                clips[0].transition_chain.is_empty(),
+                "no baked filter needed"
+            );
             assert!(clips[1].transition_chain.is_empty());
         }
     }

@@ -182,7 +182,8 @@ impl Titles {
                     fonts.add_file(Path::new(&font.path));
                 }
             }
-            puppetcat_text::render(fonts, &title, width, height).map_err(|error| error.to_string())?
+            puppetcat_text::render(fonts, &title, width, height)
+                .map_err(|error| error.to_string())?
         };
         std::fs::create_dir_all(&self.dir).map_err(|error| error.to_string())?;
         std::fs::write(&png, &rendered.png).map_err(|error| error.to_string())?;
@@ -259,7 +260,8 @@ mod tests {
     use puppetcat_project::{Command, Editor};
 
     fn scratch() -> AppDirs {
-        let dir = std::env::temp_dir().join(format!("puppetcat-titles-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("puppetcat-titles-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         AppDirs {
             config: dir.join("config"),

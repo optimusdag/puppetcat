@@ -347,9 +347,7 @@ impl From<ClipPatchArg> for cmd::ClipPatch {
             flip_h: value.flip_h,
             flip_v: value.flip_v,
             blend: value.blend,
-            crop: value
-                .crop
-                .map(|inner| inner.map(model::Crop::from)),
+            crop: value.crop.map(|inner| inner.map(model::Crop::from)),
             filters: value
                 .filters
                 .map(|list| list.into_iter().map(model::AppliedFilter::from).collect()),

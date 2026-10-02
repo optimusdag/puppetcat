@@ -92,7 +92,10 @@ pub fn system_facts() -> Vec<(&'static str, String)> {
         ),
         (
             "Engine",
-            format!("concat-engine · FFmpeg {}", puppetcat_media::linked_version()),
+            format!(
+                "concat-engine · FFmpeg {}",
+                puppetcat_media::linked_version()
+            ),
         ),
         ("Operating system", os_description()),
         (

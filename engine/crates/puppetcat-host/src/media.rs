@@ -511,8 +511,10 @@ mod tests {
         use puppetcat_core::time::FrameRate;
         use puppetcat_media::{EncodeOptions, Encoder, FrameSink};
 
-        let path =
-            std::env::temp_dir().join(format!("puppetcat-filmstrip-test-{}.mp4", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "puppetcat-filmstrip-test-{}.mp4",
+            std::process::id()
+        ));
         let mut encoder =
             Encoder::create(&path, 64, 32, FrameRate::THIRTY, &EncodeOptions::default())
                 .expect("encodes");

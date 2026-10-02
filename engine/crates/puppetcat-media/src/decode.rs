@@ -16,13 +16,13 @@
 
 use std::path::{Path, PathBuf};
 
-use puppetcat_core::frame::Frame;
-use puppetcat_core::time::{FrameRate, Rational};
 use ffmpeg_the_third as ffmpeg;
 use ffmpeg_the_third::codec::decoder;
 use ffmpeg_the_third::filter;
 use ffmpeg_the_third::format::{self, Pixel};
 use ffmpeg_the_third::util::frame::video::Video;
+use puppetcat_core::frame::Frame;
+use puppetcat_core::time::{FrameRate, Rational};
 
 use crate::error::{Error, Result};
 use crate::ffi;

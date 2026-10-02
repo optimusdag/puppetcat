@@ -920,9 +920,13 @@ mod tests {
         let audio_path = dir.join("mux-rate-test-audio.m4a");
         let out_path = dir.join("mux-rate-test-out.mp4");
 
-        let Ok(mut encoder) =
-            Encoder::create(&video_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
-        else {
+        let Ok(mut encoder) = Encoder::create(
+            &video_path,
+            64,
+            64,
+            FrameRate::THIRTY,
+            &EncodeOptions::default(),
+        ) else {
             return; // no ffmpeg here
         };
         for _ in 0..150 {

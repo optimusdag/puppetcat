@@ -303,8 +303,10 @@ mod tests {
 
     #[test]
     fn a_new_project_defaults_to_no_export_folder_and_remembers_one_once_set() {
-        let scratch = std::env::temp_dir()
-            .join(format!("puppetcat-session-export-test-{}", std::process::id()));
+        let scratch = std::env::temp_dir().join(format!(
+            "puppetcat-session-export-test-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch).expect("scratch dir");
         let info = projects::create(&scratch.to_string_lossy(), "Fresh", 1920, 1080, 30, 1)
@@ -332,8 +334,11 @@ mod tests {
             std::env::temp_dir().join(format!("puppetcat-corrupt-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
         std::fs::create_dir_all(&scratch).expect("scratch dir");
-        std::fs::write(scratch.join("puppetcat.json"), br#"{"timelines": "garbage"}"#)
-            .expect("writes");
+        std::fs::write(
+            scratch.join("puppetcat.json"),
+            br#"{"timelines": "garbage"}"#,
+        )
+        .expect("writes");
         assert!(Session::open(&scratch.to_string_lossy(), settings()).is_err());
         let _ = std::fs::remove_dir_all(&scratch);
     }

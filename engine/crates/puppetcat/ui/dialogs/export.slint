@@ -45,6 +45,18 @@ export struct ExportData {
     done-size: string,
     /// nothing on the timeline to export
     empty: bool,
+    /// which part goes out: 0 whole timeline, 1 the ruler selection,
+    /// 2 between two markers, 3 typed times
+    range-mode: int,
+    /// positions in the marker list, for mode 2
+    range-from: int,
+    range-to: int,
+    /// the typed times, for mode 3
+    range-start-text: string,
+    range-end-text: string,
+    /// the chosen span as it will be exported, or why it cannot be
+    range-note: string,
+    range-ok: bool,
 }
 
 // One tile of the summary block.
@@ -145,7 +157,12 @@ component QualityCard inherits Rectangle {
 
 export component ExportDialog inherits Modal {
     in property <ExportData> data;
+    /// the timeline's markers by time, for "between markers"
+    in property <[string]> markers;
 
+    callback range-mode-changed(index: int);
+    callback range-marker-changed(which: int, index: int);
+    callback range-time-edited(which: int, text: string);
     callback name-edited(name: string);
     callback browse();
     callback resolution-changed(index: int);
@@ -185,6 +202,67 @@ export component ExportDialog inherits Modal {
                     Fact { label: "Duration"; value: root.data.duration; }
                     Fact { label: "Contents"; value: root.data.contents; }
                 }
+            }
+        }
+
+        if !root.running: DialogSection {
+            title: "Range";
+
+            DialogRow {
+                label: "Export";
+                Select {
+                    current: root.data.range-mode;
+                    options: ["Whole timeline", "Selected range", "Between markers", "Custom times"];
+                    changed(index) => { root.range-mode-changed(index); }
+                }
+            }
+
+            if root.data.range-mode == 2: DialogRow {
+                label: "From";
+                Select {
+                    current: root.data.range-from;
+                    options: root.markers;
+                    placeholder: "No markers";
+                    changed(index) => { root.range-marker-changed(0, index); }
+                }
+            }
+
+            if root.data.range-mode == 2: DialogRow {
+                label: "To";
+                Select {
+                    current: root.data.range-to;
+                    options: root.markers;
+                    placeholder: "No markers";
+                    changed(index) => { root.range-marker-changed(1, index); }
+                }
+            }
+
+            if root.data.range-mode == 3: DialogRow {
+                label: "Start";
+                Field {
+                    value: root.data.range-start-text;
+                    technical: true;
+                    placeholder: "0:00";
+                    edited(text) => { root.range-time-edited(0, text); }
+                }
+            }
+
+            if root.data.range-mode == 3: DialogRow {
+                label: "End";
+                Field {
+                    value: root.data.range-end-text;
+                    technical: true;
+                    placeholder: "end of the timeline";
+                    edited(text) => { root.range-time-edited(1, text); }
+                }
+            }
+
+            if root.data.range-mode != 0: Text {
+                text: root.data.range-note;
+                color: root.data.range-ok ? Theme.fg-dim : Theme.danger;
+                font-family: root.data.range-ok ? Theme.font-technical : Theme.font;
+                font-size: Theme.fs-sm;
+                wrap: word-wrap;
             }
         }
 
@@ -389,7 +467,7 @@ export component ExportDialog inherits Modal {
                         : "Export · ~" + (root.data.quality == 0 ? root.data.size-high
                             : root.data.quality == 1 ? root.data.size-balanced
                             : root.data.size-small);
-                    enabled: !root.data.empty && root.data.name != "";
+                    enabled: !root.data.empty && root.data.name != "" && root.data.range-ok;
                     clicked => { root.begin(); }
                 }
             }

@@ -317,6 +317,19 @@ pub struct StartExportParams {
     pub crf: Option<u8>,
     /// The x264 speed/size preset name, e.g. "medium". Omit for "medium".
     pub preset: Option<String>,
+    /// Export only part of the timeline, beginning here, in seconds. The
+    /// result is an extract of the finished edit - transitions and fades at
+    /// the edges look as they do in the full export. Omit with `end`,
+    /// `fromMarker` and `toMarker` for the whole timeline.
+    pub start: Option<f64>,
+    /// Where the extract ends, in seconds. Omit to run to the end.
+    pub end: Option<f64>,
+    /// Begin at this marker of the active timeline (its id or its name)
+    /// instead of at `start`.
+    pub from_marker: Option<String>,
+    /// End at this marker of the active timeline (its id or its name)
+    /// instead of at `end`.
+    pub to_marker: Option<String>,
 }
 
 // ── the server ──────────────────────────────────────────────────────────
@@ -707,7 +720,7 @@ impl ConcatAgentServer {
     // ── export ──
 
     #[tool(
-        description = "Start exporting the active session to a video file. Errs immediately if an export is already running; poll get_export_status for progress."
+        description = "Start exporting the active session to a video file - all of it, or only a stretch given by start/end seconds or fromMarker/toMarker. Errs immediately if an export is already running; poll get_export_status for progress."
     )]
     fn start_export(
         &self,
@@ -718,6 +731,12 @@ impl ConcatAgentServer {
                 &params.output,
                 params.crf.unwrap_or(20),
                 &params.preset.unwrap_or_else(|| "medium".to_owned()),
+                &crate::engine::ExportRangeArgs {
+                    start: params.start,
+                    end: params.end,
+                    from_marker: params.from_marker,
+                    to_marker: params.to_marker,
+                },
             )
             .map_err(to_mcp_err)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(

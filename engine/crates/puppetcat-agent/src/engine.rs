@@ -200,14 +200,19 @@ impl AgentEngine {
 
     /// Starts exporting the active session. Errs immediately if one is
     /// already running; use `export_status` to poll the render itself.
+    ///
+    /// `range` limits the export to part of the timeline; see
+    /// [`ExportRangeArgs`].
     pub fn start_export(
         &self,
         output: &str,
         crf: u8,
         preset: &str,
+        range: &ExportRangeArgs,
     ) -> Result<(), String> {
         let guard = self.session_lock();
         let session = guard.as_ref().ok_or_else(no_project)?;
+        let range = range.resolve(session.project().active())?;
         let titles = self
             .titles
             .clips(
@@ -223,6 +228,7 @@ impl AgentEngine {
             scratch_dir: puppetcat_host::export::temp_folder_preference(&self.dirs),
             crf,
             preset: preset.to_owned(),
+            range,
         };
         self.export.start(session, spec, titles)
     }
@@ -237,9 +243,106 @@ fn no_project() -> String {
     "no project is open - call create_project or open_project first".to_owned()
 }
 
+/// Which part of the timeline an export covers, as an agent states it: by
+/// seconds, by marker, or a mix (a marker for one end, seconds for the
+/// other). Nothing at all is the whole timeline.
+#[derive(Clone, Debug, Default)]
+pub struct ExportRangeArgs {
+    /// Seconds where the extract begins.
+    pub start: Option<f64>,
+    /// Seconds where the extract ends.
+    pub end: Option<f64>,
+    /// A marker (id or name) on the active timeline to begin at.
+    pub from_marker: Option<String>,
+    /// A marker (id or name) on the active timeline to end at.
+    pub to_marker: Option<String>,
+}
+
+impl ExportRangeArgs {
+    /// The `(start, end)` seconds this names on `timeline`, or `None` for
+    /// the whole thing. An end left open runs to the end of the edit, a
+    /// start left open begins at zero - but naming a marker or a time for
+    /// either end makes it a range.
+    fn resolve(
+        &self,
+        timeline: &puppetcat_project::model::Timeline,
+    ) -> Result<Option<(f64, f64)>, String> {
+        let marker_time = |key: &str| -> Result<f64, String> {
+            let matches = |marker: &&puppetcat_project::model::Marker| {
+                marker.id == key || marker.name == key
+            };
+            timeline
+                .markers
+                .iter()
+                .find(matches)
+                .map(|marker| marker.time)
+                .ok_or_else(|| format!("no marker \"{key}\" on the active timeline"))
+        };
+        if self.start.is_some() && self.from_marker.is_some() {
+            return Err("give either start or fromMarker, not both".to_owned());
+        }
+        if self.end.is_some() && self.to_marker.is_some() {
+            return Err("give either end or toMarker, not both".to_owned());
+        }
+        let start = match (&self.from_marker, self.start) {
+            (Some(key), _) => Some(marker_time(key)?),
+            (None, start) => start,
+        };
+        let end = match (&self.to_marker, self.end) {
+            (Some(key), _) => Some(marker_time(key)?),
+            (None, end) => end,
+        };
+        if start.is_none() && end.is_none() {
+            return Ok(None);
+        }
+        let start = start.unwrap_or(0.0);
+        let end = end.unwrap_or(f64::MAX);
+        if end <= start {
+            return Err(format!(
+                "the export range is empty: it ends at {end:.2}s, before it starts at {start:.2}s"
+            ));
+        }
+        Ok(Some((start, end)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_export_range_resolves_markers_and_seconds() {
+        use puppetcat_project::model::{Marker, Project};
+        let mut project = Project::new();
+        for (id, name, time) in [("mk1", "intro", 2.0), ("mk2", "outro", 8.0)] {
+            project.active_mut().markers.push(Marker {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                time,
+                clip_id: None,
+                offset: 0.0,
+            });
+        }
+        let timeline = project.active();
+        let args = |start, end, from: Option<&str>, to: Option<&str>| ExportRangeArgs {
+            start,
+            end,
+            from_marker: from.map(str::to_owned),
+            to_marker: to.map(str::to_owned),
+        };
+        assert_eq!(args(None, None, None, None).resolve(timeline), Ok(None));
+        assert_eq!(
+            args(None, None, Some("mk1"), Some("outro")).resolve(timeline),
+            Ok(Some((2.0, 8.0)))
+        );
+        assert_eq!(
+            args(Some(1.0), None, None, Some("mk2")).resolve(timeline),
+            Ok(Some((1.0, 8.0)))
+        );
+        assert!(args(None, None, Some("nope"), None).resolve(timeline).is_err());
+        assert!(args(Some(1.0), None, Some("mk1"), None).resolve(timeline).is_err());
+        assert!(args(Some(5.0), Some(5.0), None, None).resolve(timeline).is_err());
+    }
 
     /// A scratch root for one test: a project location and, critically, its
     /// own `AppDirs` (see `engine` below) - the tests here must never touch

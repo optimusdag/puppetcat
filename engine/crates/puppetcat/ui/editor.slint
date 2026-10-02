@@ -189,6 +189,11 @@ export global Editor {
     in-out property <string> merge-blocked-because;
     in-out property <bool> has-av-tools;
     in-out property <float> playhead;
+    /// The timeline range selection, in seconds; negative for none.
+    in-out property <float> range-start: -1;
+    in-out property <float> range-end: -1;
+    callback range-dragged(from-seconds: float, to-seconds: float);
+    callback range-cleared();
     in-out property <float> frame-rate;
     in-out property <float> scroll-left;
     in-out property <float> seconds-per-pixel;

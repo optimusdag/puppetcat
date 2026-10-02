@@ -218,6 +218,16 @@ fn unity() -> f64 {
     1.0
 }
 
+/// A stretch of the timeline to export, in timeline seconds.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportRange {
+    /// Where the extract begins.
+    pub start: f64,
+    /// Where it ends.
+    pub end: f64,
+}
+
 /// Everything a full export needs: the destination, the output format, and
 /// the flattened clip list.
 #[derive(Deserialize)]
@@ -248,6 +258,12 @@ pub struct ExportRequest {
     pub preset: String,
     /// The flattened clip list to render.
     pub clips: Vec<ExportClip>,
+    /// Export only this stretch of the timeline. Everything is resolved as
+    /// for the whole timeline first - transitions, fades, retimes - and the
+    /// stretch is cut out of the result, so the file is an extract of the
+    /// final edit, frame for frame. `None` is the whole timeline.
+    #[serde(default)]
+    pub range: Option<ExportRange>,
 }
 
 /// What the export loop calls to report and to ask "should I stop?".
@@ -497,14 +513,21 @@ pub fn render(request: &ExportRequest, mut reporter: Reporter<'_>) -> Result<Str
         })
     });
 
-    let timeline_end = resolved
+    let full_end = resolved
         .iter()
         .map(|clip| clip.start + clip.duration)
         .fold(0.0f64, f64::max);
-    let total_frames = (timeline_end * rate.fps().as_f64()).round() as i64;
-    if total_frames <= 0 {
+    let full_frames = (full_end * rate.fps().as_f64()).round() as i64;
+    if full_frames <= 0 {
         return Err("the timeline is empty".to_owned());
     }
+    // The frames of the timeline that become the file: all of them, or the
+    // requested stretch snapped to the frame grid and kept inside the edit.
+    let (first_frame, end_frame) = frame_span(request.range, rate, full_frames)?;
+    let total_frames = end_frame - first_frame;
+    // The mix is built to `timeline_end` and has `skip` cut off its head.
+    let timeline_end = rate.time_of_frame(end_frame).as_f64();
+    let skip = rate.time_of_frame(first_frame).as_f64();
 
     // Render into siblings of the output so the move at the end stays on one
     // filesystem, then clean up whatever we made - unless `scratch_dir`
@@ -542,6 +565,7 @@ pub fn render(request: &ExportRequest, mut reporter: Reporter<'_>) -> Result<Str
             rate,
             total_frames,
             &visible,
+            first_frame,
             &silent,
             &mut reporter,
         )?;
@@ -554,8 +578,9 @@ pub fn render(request: &ExportRequest, mut reporter: Reporter<'_>) -> Result<Str
             reporter.cancelled()?;
             reporter.emit(0, total_frames, "mixing audio");
             let mix: Vec<AudioClip> = sound.iter().flat_map(|clip| audio_pieces(clip)).collect();
-            audio::mix_to_file(&mix, timeline_end, &mixed).map_err(|error| error.to_string())?;
-            verify_mixed_duration(&mixed, timeline_end)?;
+            audio::mix_to_file_from(&mix, timeline_end, skip, &mixed)
+                .map_err(|error| error.to_string())?;
+            verify_mixed_duration(&mixed, timeline_end - skip)?;
 
             reporter.cancelled()?;
             reporter.emit(total_frames, total_frames, "muxing");
@@ -579,6 +604,33 @@ pub fn render(request: &ExportRequest, mut reporter: Reporter<'_>) -> Result<Str
     }
 
     result.map(|()| output.to_string_lossy().into_owned())
+}
+
+/// The frames `[first, end)` of a `full_frames`-long timeline that a request
+/// asks for. No range is all of them; a range is snapped to the frame grid
+/// and clamped to the edit, and one that leaves nothing is an error rather
+/// than an empty file.
+fn frame_span(
+    range: Option<ExportRange>,
+    rate: FrameRate,
+    full_frames: i64,
+) -> Result<(i64, i64), String> {
+    let Some(range) = range else {
+        return Ok((0, full_frames));
+    };
+    if !range.start.is_finite() || !range.end.is_finite() {
+        return Err("the export range is not a valid time".to_owned());
+    }
+    let fps = rate.fps().as_f64();
+    let first = ((range.start * fps).round() as i64).clamp(0, full_frames);
+    let end = ((range.end * fps).round() as i64).clamp(0, full_frames);
+    if end <= first {
+        return Err(format!(
+            "the export range {:.2}s to {:.2}s holds no part of the timeline",
+            range.start, range.end
+        ));
+    }
+    Ok((first, end))
 }
 
 /// Moves a finished render from the scratch folder to where the user
@@ -751,6 +803,7 @@ fn render_picture(
     rate: FrameRate,
     total_frames: i64,
     visible: &[&ExportClip],
+    first_frame: i64,
     destination: &Path,
     reporter: &mut Reporter<'_>,
 ) -> Result<(), String> {
@@ -764,6 +817,7 @@ fn render_picture(
         treatments,
         pre_chains,
         passes,
+        origins,
     } = build_timeline(request, rate, visible, gpu);
 
     let mut encoder = Encoder::create(
@@ -790,7 +844,7 @@ fn render_picture(
     // through a pool that keeps the reader rolling where it can.
     let sought = puppetcat_media::ReaderPool::with_defaults();
 
-    for index in 0..total_frames {
+    for index in first_frame..first_frame + total_frames {
         reporter.cancelled()?;
 
         let time = rate.time_of_frame(index);
@@ -847,8 +901,20 @@ fn render_picture(
                         FrameRate::new(rate.fps() / layer.speed)
                     };
 
+                    // A decoder opened partway into its clip (an extract
+                    // beginning inside it) still starts at the clip's own
+                    // in-point and discards the frames before now: the
+                    // frame-counted filters it carries - a baked fade -
+                    // count from the clip's first frame, not from here.
+                    let (open_at, skip) = match origins.get(&layer.clip) {
+                        Some(&(start, source_start)) if time > start => (
+                            source_start,
+                            ((time - start).as_f64() * rate.fps().as_f64()).round() as i64,
+                        ),
+                        _ => (layer.source_time, 0),
+                    };
                     let mut options = DecodeOptions::default()
-                        .starting_at(layer.source_time)
+                        .starting_at(open_at)
                         .scaled_to(decode_width, decode_height)
                         .at_rate(decode_rate);
 
@@ -868,9 +934,18 @@ fn render_picture(
                         options = options.repeating().starting_at(Rational::ZERO);
                     }
 
-                    entry.insert(
-                        Decoder::open(&layer.media, &options).map_err(|error| error.to_string())?,
-                    )
+                    let mut opened =
+                        Decoder::open(&layer.media, &options).map_err(|error| error.to_string())?;
+                    for _ in 0..skip {
+                        if opened
+                            .next_frame()
+                            .map_err(|error| error.to_string())?
+                            .is_none()
+                        {
+                            break;
+                        }
+                    }
+                    entry.insert(opened)
                 }
             };
 
@@ -927,7 +1002,7 @@ fn render_picture(
         decoders.retain(|clip, _| live.contains(clip));
 
         if index % 15 == 0 {
-            reporter.emit(index, total_frames, "rendering");
+            reporter.emit(index - first_frame, total_frames, "rendering");
         }
     }
 
@@ -952,6 +1027,8 @@ struct BuiltTimeline {
     passes: HashMap<ClipId, Vec<ShaderPass>>,
     /// The layers: treatments over the stack, by span.
     treatments: Vec<Treatment>,
+    /// Each picture clip's start on the timeline and in-point in its media.
+    origins: HashMap<ClipId, (Rational, Rational)>,
 }
 
 /// A layer clip, as the compositor needs it: when, over which tracks, what
@@ -1086,6 +1163,7 @@ fn build_timeline(
     let mut treatments: Vec<Treatment> = Vec::new();
     let mut pre_chains: HashMap<ClipId, String> = HashMap::new();
     let mut passes: HashMap<ClipId, Vec<ShaderPass>> = HashMap::new();
+    let mut origins: HashMap<ClipId, (Rational, Rational)> = HashMap::new();
 
     let lanes = visible.iter().map(|clip| clip.track).max().unwrap_or(0) + 1;
     let tracks: Vec<_> = (0..lanes)
@@ -1148,6 +1226,7 @@ fn build_timeline(
 
         if let Some(id) = timeline.add_clip(tracks[clip.track], engine_clip) {
             tracks_of.insert(id, clip.track);
+            origins.insert(id, (start, quantise(clip.source_start, rate)));
             if clip.kind == ClipKind::Image {
                 stills.insert(id);
             }
@@ -1180,6 +1259,7 @@ fn build_timeline(
         treatments,
         pre_chains,
         passes,
+        origins,
     }
 }
 
@@ -1443,6 +1523,7 @@ pub fn preview_sources(
         treatments,
         pre_chains,
         passes,
+        ..
     } = preview_timeline(request, rate, gpu);
     let time = quantise(request.time, rate);
     let plan = plan_frame(&timeline, time);
@@ -1520,6 +1601,7 @@ fn preview_timeline(request: &PreviewFrameRequest, rate: FrameRate, gpu: bool) -
         crf: 18,
         preset: String::new(),
         clips: Vec::new(),
+        range: None,
     };
     build_timeline(&shim, rate, &visible, gpu)
 }
@@ -1767,6 +1849,7 @@ mod tests {
             crf: 23,
             preset: "medium".to_owned(),
             clips: vec![a, b],
+            range: None,
         };
         let cancel = AtomicBool::new(false);
         let mut progress = |_: i64, _: i64, _: &'static str| {};
@@ -1862,6 +1945,7 @@ mod tests {
             crf: 30,
             preset: "ultrafast".to_owned(),
             clips: vec![a],
+            range: None,
         };
         let cancel = AtomicBool::new(false);
         let mut progress = |_: i64, _: i64, _: &'static str| {};
@@ -1879,6 +1963,159 @@ mod tests {
                 .next()
                 .is_none(),
             "nothing should be left behind in the scratch folder"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A range is snapped to the frame grid and kept inside the edit; one
+    /// that holds nothing is refused instead of producing an empty file.
+    #[test]
+    fn frame_span_snaps_clamps_and_refuses_an_empty_range() {
+        let rate = FrameRate::THIRTY;
+        let range = |start, end| Some(ExportRange { start, end });
+        assert_eq!(frame_span(None, rate, 300), Ok((0, 300)));
+        assert_eq!(frame_span(range(1.0, 2.0), rate, 300), Ok((30, 60)));
+        assert_eq!(frame_span(range(-5.0, 2.0), rate, 300), Ok((0, 60)));
+        assert_eq!(frame_span(range(9.0, 50.0), rate, 300), Ok((270, 300)));
+        assert!(frame_span(range(2.0, 2.0), rate, 300).is_err());
+        assert!(frame_span(range(3.0, 1.0), rate, 300).is_err());
+        assert!(frame_span(range(20.0, 30.0), rate, 300).is_err());
+        assert!(frame_span(range(f64::NAN, 1.0), rate, 300).is_err());
+    }
+
+    /// An export range renders exactly the frames of the edit inside it:
+    /// red for the first second of the source, green for the second, blue
+    /// for the third, and a range of 1s to 2s must come out all green and
+    /// one second long. Skips silently without FFmpeg.
+    #[test]
+    fn an_export_range_renders_only_that_stretch_of_the_edit() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_media::{DecodeOptions, Decoder, EncodeOptions, Encoder, FrameSink};
+        use std::sync::atomic::AtomicBool;
+
+        let root = std::env::temp_dir().join("puppetcat-range-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("makes the test folder");
+        let source_path = root.join("source.mp4");
+        let Ok(mut enc) = Encoder::create(
+            &source_path,
+            64,
+            64,
+            FrameRate::THIRTY,
+            &EncodeOptions::default(),
+        ) else {
+            return; // no ffmpeg here
+        };
+        for i in 0..90 {
+            let mut frame = Frame::black(64, 64);
+            frame.fill(match i / 30 {
+                0 => [255, 0, 0, 255],
+                1 => [0, 255, 0, 255],
+                _ => [0, 0, 255, 255],
+            });
+            enc.write_frame(&frame).expect("writes");
+        }
+        enc.finish().expect("finishes");
+
+        let mut a = clip("video", 0, 0.0, 3.0, 0.0);
+        a.path = source_path.to_string_lossy().into_owned();
+        a.media_width = Some(64);
+        a.media_height = Some(64);
+        let output = root.join("out.mp4");
+        let request = ExportRequest {
+            output: output.to_string_lossy().into_owned(),
+            scratch_dir: None,
+            width: 64,
+            height: 64,
+            rate_num: 30,
+            rate_den: 1,
+            crf: 30,
+            preset: "ultrafast".to_owned(),
+            clips: vec![a],
+            range: Some(ExportRange {
+                start: 1.0,
+                end: 2.0,
+            }),
+        };
+        let cancel = AtomicBool::new(false);
+        let mut progress = |_: i64, _: i64, _: &'static str| {};
+        let reporter = Reporter {
+            progress: &mut progress,
+            cancel: &cancel,
+        };
+        let written = render(&request, reporter).expect("renders");
+
+        let mut decoder = Decoder::open(&written, &DecodeOptions::default()).expect("decodes");
+        let mut frames = 0;
+        while let Some(frame) = decoder.next_frame().expect("decodes a frame") {
+            let [r, g, b, _] = frame.pixel(32, 32).expect("a pixel");
+            assert!(
+                g > 150 && r < 100 && b < 100,
+                "frame {frames} is ({r},{g},{b}), not the green second"
+            );
+            frames += 1;
+        }
+        assert_eq!(frames, 30, "one second at 30 fps");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The sound of an export range is the same stretch of the same mix:
+    /// a 1s range of a 3s clip with sound comes out about one second long
+    /// in both streams. Skips silently without the ffmpeg command.
+    #[test]
+    fn an_export_range_cuts_the_sound_to_the_same_stretch() {
+        use std::sync::atomic::AtomicBool;
+
+        let root = std::env::temp_dir().join("puppetcat-range-audio-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("makes the test folder");
+        let source_path = root.join("source.mp4");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=d=3:s=64x64:r=30"])
+            .args(["-f", "lavfi", "-i", "sine=d=3", "-shortest", "-pix_fmt", "yuv420p"])
+            .arg(&source_path)
+            .status();
+        if !made.is_ok_and(|status| status.success()) {
+            return; // no ffmpeg command here
+        }
+
+        let mut a = clip("video", 0, 0.0, 3.0, 0.0);
+        a.path = source_path.to_string_lossy().into_owned();
+        a.media_width = Some(64);
+        a.media_height = Some(64);
+        a.has_audio = Some(true);
+        let output = root.join("out.mp4");
+        let request = ExportRequest {
+            output: output.to_string_lossy().into_owned(),
+            scratch_dir: None,
+            width: 64,
+            height: 64,
+            rate_num: 30,
+            rate_den: 1,
+            crf: 30,
+            preset: "ultrafast".to_owned(),
+            clips: vec![a],
+            range: Some(ExportRange {
+                start: 1.0,
+                end: 2.0,
+            }),
+        };
+        let cancel = AtomicBool::new(false);
+        let mut progress = |_: i64, _: i64, _: &'static str| {};
+        let reporter = Reporter {
+            progress: &mut progress,
+            cancel: &cancel,
+        };
+        let written = render(&request, reporter).expect("renders");
+
+        let info = puppetcat_media::probe(&written).expect("probes");
+        assert!(info.audio.is_some(), "the extract keeps its sound");
+        let seconds = info.duration.expect("has a duration").as_f64();
+        assert!(
+            (seconds - 1.0).abs() < 0.15,
+            "a one second range came out {seconds}s long"
         );
 
         let _ = std::fs::remove_dir_all(&root);

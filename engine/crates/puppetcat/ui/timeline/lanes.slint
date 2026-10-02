@@ -544,6 +544,15 @@ export component Lanes inherits Rectangle {
     in property <length> track-scroll;
     in property <length> ruler-height: 28px;
 
+    /// The timeline range selection, in seconds; negative for none. Made by
+    /// Shift-dragging the ruler, and what an export of "the selection" covers.
+    in property <float> range-start: -1;
+    in property <float> range-end: -1;
+    /// Shift-dragged on the ruler: the range now runs between these.
+    callback range-dragged(from-seconds: float, to-seconds: float);
+    /// Shift-clicked on the ruler without dragging: no range any more.
+    callback range-cleared();
+
     callback scrubbed(seconds: float);
     callback clip-pressed(id: string, additive: bool, edge: int);
     callback clip-dragged(seconds: float, pixels: length);
@@ -1035,6 +1044,11 @@ export component Lanes inherits Rectangle {
             // lands here rather than on an existing marker drops a new one at
             // the point clicked.
             scrub := TouchArea {
+                // Shift-dragging draws the range instead of scrubbing: where
+                // it began, and whether it has gone anywhere since.
+                property <float> range-anchor;
+                property <bool> ranging;
+                property <bool> range-moved;
                 mouse-cursor: pointer;
                 pointer-event(event) => {
                     if (event.button == PointerEventButton.right) {
@@ -1047,12 +1061,32 @@ export component Lanes inherits Rectangle {
                         return;
                     }
                     if (event.kind == PointerEventKind.down) {
-                        root.scrubbed(Math.max(0, root.seconds-at(self.mouse-x)));
+                        if (event.modifiers.shift) {
+                            self.ranging = true;
+                            self.range-moved = false;
+                            self.range-anchor = Math.max(0, root.seconds-at(self.mouse-x));
+                        } else {
+                            self.ranging = false;
+                            root.scrubbed(Math.max(0, root.seconds-at(self.mouse-x)));
+                        }
+                    }
+                    if (event.kind == PointerEventKind.up && self.ranging) {
+                        self.ranging = false;
+                        if (!self.range-moved) {
+                            root.range-cleared();
+                        }
                     }
                 }
                 moved => {
                     if (self.pressed) {
-                        root.scrubbed(Math.max(0, root.seconds-at(self.mouse-x)));
+                        if (self.ranging) {
+                            self.range-moved = true;
+                            root.range-dragged(
+                                Math.min(self.range-anchor, Math.max(0, root.seconds-at(self.mouse-x))),
+                                Math.max(self.range-anchor, Math.max(0, root.seconds-at(self.mouse-x))));
+                        } else {
+                            root.scrubbed(Math.max(0, root.seconds-at(self.mouse-x)));
+                        }
                     }
                 }
                 double-clicked => {
@@ -1117,6 +1151,39 @@ export component Lanes inherits Rectangle {
             menu-height: root.timeline-menu-height;
             token: root.timeline-own-token;
             selected(id) => { root.timeline-menu-selected(id); }
+        }
+
+        // ── the range selection ──────────────────────────────────────────
+        //
+        // A wash over the lanes and a brighter bar on the ruler, under the
+        // playhead and the marker pins but over the clips, so the span reads
+        // as a selection of the finished edit rather than of any one clip.
+        if root.range-start >= 0 && root.range-end > root.range-start: Rectangle {
+            x: root.at(root.range-start);
+            y: 0;
+            width: Math.max(1px, root.at(root.range-end) - root.at(root.range-start));
+            height: root.height;
+            background: Theme.accent-soft;
+            border-color: Theme.accent;
+            border-width: 0px;
+            opacity: 0.55;
+            visible: self.x + self.width >= 0px && self.x <= root.width;
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: 4px;
+                background: Theme.accent;
+            }
+            Rectangle { x: 0; y: 0; width: 1px; height: parent.height; background: Theme.accent; }
+            Rectangle {
+                x: parent.width - 1px;
+                y: 0;
+                width: 1px;
+                height: parent.height;
+                background: Theme.accent;
+            }
         }
 
         // ── the playhead ─────────────────────────────────────────────────

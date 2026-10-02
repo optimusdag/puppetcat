@@ -155,6 +155,55 @@ pub struct ExportState {
     pub message: String,
     /// Where the finished file is, for Reveal.
     pub written: String,
+    /// Which part of the timeline goes out: an [`ExportRangeMode`] index.
+    pub range_mode: usize,
+    /// Positions in the time-sorted marker list, for "between markers".
+    pub marker_from: usize,
+    pub marker_to: usize,
+    /// What was typed for "custom times", kept as text so a half-typed
+    /// "1:" is not corrected under the caret.
+    pub custom_start: String,
+    pub custom_end: String,
+}
+
+/// The export sheet's range choices, in the order its selector lists them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ExportRangeMode {
+    Whole,
+    Selection,
+    Markers,
+    Custom,
+}
+
+impl ExportRangeMode {
+    pub fn of(index: usize) -> Self {
+        match index {
+            1 => Self::Selection,
+            2 => Self::Markers,
+            3 => Self::Custom,
+            _ => Self::Whole,
+        }
+    }
+}
+
+/// Seconds from what a person types: "90", "1:30", "1:30.5", "0:01:30".
+pub fn parse_time(text: &str) -> Option<f64> {
+    let mut seconds = 0.0_f64;
+    for part in text.trim().split(':') {
+        let value: f64 = part.trim().parse().ok()?;
+        if !value.is_finite() || value < 0.0 {
+            return None;
+        }
+        seconds = seconds * 60.0 + value;
+    }
+    Some(seconds)
+}
+
+/// Seconds as a person reads them: "1:30.5".
+pub fn clock(seconds: f64) -> String {
+    let whole = seconds.max(0.0);
+    let minutes = (whole / 60.0).floor();
+    format!("{}:{:04.1}", minutes as i64, whole - minutes * 60.0)
 }
 
 impl Default for ExportState {
@@ -173,6 +222,11 @@ impl Default for ExportState {
             stage: String::new(),
             message: String::new(),
             written: String::new(),
+            range_mode: 0,
+            marker_from: 0,
+            marker_to: 1,
+            custom_start: "0:00".into(),
+            custom_end: String::new(),
         }
     }
 }
@@ -415,6 +469,8 @@ pub struct Models {
     pub menu: Rc<VecModel<MenuItemData>>,
     pub marker_menu: Rc<VecModel<MenuItemData>>,
     pub timeline_menu: Rc<VecModel<MenuItemData>>,
+    /// The export sheet's marker choices, by time.
+    pub export_markers: Rc<VecModel<SharedString>>,
     pub av: Rc<VecModel<MenuItemData>>,
     pub bar: Rc<VecModel<MenuItemData>>,
     pub transcribers: Rc<VecModel<ModelData>>,
@@ -450,6 +506,7 @@ impl Models {
             menu: Rc::new(VecModel::default()),
             marker_menu: Rc::new(VecModel::default()),
             timeline_menu: Rc::new(VecModel::default()),
+            export_markers: Rc::new(VecModel::default()),
             av: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
             transcribers: Rc::new(VecModel::default()),
@@ -562,6 +619,9 @@ pub struct Studio {
 
     // ── the sheets and menus ──
     pub export: ExportState,
+    /// The timeline range selection, Shift-dragged on the ruler: seconds
+    /// `(start, end)`, what an export of "the selection" covers.
+    pub range: Option<(f64, f64)>,
     pub settings: SettingsState,
     pub transcribers: Vec<ModelState>,
     pub voices: Vec<ModelState>,
@@ -951,6 +1011,7 @@ impl Studio {
             preview_wanted: false,
             preview_failed: false,
             export: ExportState::default(),
+            range: None,
             settings: SettingsState::default(),
             transcribers: Vec::new(),
             voices: Vec::new(),
@@ -3296,6 +3357,17 @@ impl Studio {
         self.preview_failed = false;
         self.recents = projects::list(&self.host.dirs.config);
         self.host.monitor.clear();
+        // Every project mints its own ids from 1, so a media item's id here
+        // recurs across unrelated projects - the art below is keyed by that
+        // id alone, and without this it would answer a request for this
+        // project's "m1" with the decode left over from the last project's
+        // own "m1".
+        self.peaks.clear();
+        self.thumbs.clear();
+        self.strips.clear();
+        self.art_pending.clear();
+        self.waves.borrow_mut().clear();
+        self.range = None;
         self.sync_audio();
         self.request_media_art();
         self.request_preview();
@@ -3357,16 +3429,6 @@ impl Studio {
     fn poll_lock(&mut self) {
         let Some(session) = self.session.as_ref() else {
             self.lock_watch.stop();
-        // Every project mints its own ids from 1, so a media item's id here
-        // recurs across unrelated projects - the art below is keyed by that
-        // id alone, and without this it would answer a request for this
-        // project's "m1" with the decode left over from the last project's
-        // own "m1".
-        self.peaks.clear();
-        self.thumbs.clear();
-        self.strips.clear();
-        self.art_pending.clear();
-        self.waves.borrow_mut().clear();
             return;
         };
         let root = std::path::PathBuf::from(session.path());
@@ -3450,6 +3512,15 @@ impl Studio {
         self.host
             .playback
             .set_clips(std::path::PathBuf::new(), Vec::new());
+        // See the matching comment in `load`: these are keyed by an id this
+        // project minted, which the next project opened will mint again
+        // from scratch.
+        self.peaks.clear();
+        self.thumbs.clear();
+        self.strips.clear();
+        self.art_pending.clear();
+        self.waves.borrow_mut().clear();
+        self.range = None;
         self.on_start = true;
         self.recents = projects::list(&self.host.dirs.config);
     }
@@ -3484,13 +3555,69 @@ impl Studio {
 
     // ── export ──
 
+    /// The timeline's markers by time, which is the order the export sheet
+    /// lists them in: a "between markers" pair reads left to right.
+    pub fn export_markers(&self) -> Vec<(String, f64)> {
+        let mut markers: Vec<(String, f64)> = self
+            .timeline()
+            .markers
+            .iter()
+            .map(|marker| (marker.name.clone(), marker.time))
+            .collect();
+        markers.sort_by(|a, b| a.1.total_cmp(&b.1));
+        markers
+    }
+
+    /// The stretch of the timeline the sheet currently says to export:
+    /// `Ok(None)` for all of it, or why the choice cannot be exported yet.
+    pub fn export_range(&self) -> Result<Option<(f64, f64)>, String> {
+        let range = match ExportRangeMode::of(self.export.range_mode) {
+            ExportRangeMode::Whole => return Ok(None),
+            ExportRangeMode::Selection => self
+                .range
+                .ok_or("Shift-drag along the ruler to select a range")?,
+            ExportRangeMode::Markers => {
+                let markers = self.export_markers();
+                let at = |index: usize| markers.get(index).map(|marker| marker.1);
+                let (Some(from), Some(to)) = (at(self.export.marker_from), at(self.export.marker_to))
+                else {
+                    return Err("Add at least two markers to export between them".into());
+                };
+                (from.min(to), from.max(to))
+            }
+            ExportRangeMode::Custom => {
+                let start = parse_time(&self.export.custom_start)
+                    .ok_or("The start is not a time like 1:30")?;
+                let end = if self.export.custom_end.trim().is_empty() {
+                    f64::from(self.duration())
+                } else {
+                    parse_time(&self.export.custom_end).ok_or("The end is not a time like 1:30")?
+                };
+                (start, end)
+            }
+        };
+        let end = range.1.min(f64::from(self.duration()));
+        if end - range.0 < 0.05 {
+            return Err("That range holds none of the timeline".into());
+        }
+        Ok(Some((range.0, end)))
+    }
+
+    /// Seconds the export will cover, for the size estimate and the sheet.
+    fn export_seconds(&self) -> f32 {
+        match self.export_range() {
+            Ok(Some((start, end))) => (end - start) as f32,
+            _ => self.duration(),
+        }
+    }
+
     pub fn export_size_bytes(&self, tier: usize) -> f32 {
         let (width, height) = EXPORT_SIZES[self.export.resolution.min(3)];
         let (num, den) = EXPORT_RATES[self.export.rate.min(2)];
         let rate = num as f32 / den as f32;
         let pixels = (width as f32 * height as f32) / (1920.0 * 1080.0);
         let video = EXPORT_TIERS[tier.min(2)] * 1_000_000.0 * pixels * (rate / 30.0);
-        (video + AUDIO_BPS) * self.duration().max(1.0) / 8.0
+        (video + AUDIO_BPS) * self.export_seconds().max(1.0) / 8.0
     }
 
     /// Starts the render on a worker, reporting into the sheet.
@@ -3503,6 +3630,14 @@ impl Studio {
             self.export.message = "There is nothing on the timeline to export".into();
             return;
         }
+        let range = match self.export_range() {
+            Ok(range) => range,
+            Err(error) => {
+                self.export.phase = ExportPhase::Failed;
+                self.export.message = error;
+                return;
+            }
+        };
         let job = match self.host.exporter.begin() {
             Ok(job) => job,
             Err(error) => {
@@ -3512,14 +3647,6 @@ impl Studio {
             }
         };
         let output = format!(
-        // See the matching comment in `load`: these are keyed by an id this
-        // project minted, which the next project opened will mint again
-        // from scratch.
-        self.peaks.clear();
-        self.thumbs.clear();
-        self.strips.clear();
-        self.art_pending.clear();
-        self.waves.borrow_mut().clear();
             "{}/{}.mp4",
             self.export.folder.trim_end_matches('/'),
             self.export.name.trim()
@@ -3533,6 +3660,7 @@ impl Studio {
                 .filter(|folder| !folder.is_empty()),
             crf: EXPORT_CRF[self.export.quality.min(2)],
             preset: "medium".into(),
+            range,
         };
         let (frame_w, frame_h) = self.output_size();
         let titles = self
@@ -4151,6 +4279,9 @@ impl Studio {
             .unwrap_or(0);
         editor.set_timeline_current_tab(active as i32);
         editor.set_playhead(self.playhead);
+        let (range_start, range_end) = self.range.map_or((-1.0, -1.0), |(start, end)| (start as f32, end as f32));
+        editor.set_range_start(range_start);
+        editor.set_range_end(range_end);
         editor.set_scroll_left(self.scroll_left);
         editor.set_seconds_per_pixel(self.seconds_per_pixel);
         editor.set_frame_rate(self.frame_rate());
@@ -4445,6 +4576,16 @@ impl Studio {
         editor.set_timeline_menu_token(self.timeline_menu_token);
 
         app.set_export(self.export_data());
+        sync(
+            &models.export_markers,
+            self.export_markers()
+                .into_iter()
+                .map(|(name, time)| {
+                    let name = if name.is_empty() { "Marker".to_owned() } else { name };
+                    SharedString::from(format!("{name} · {}", clock(time)))
+                })
+                .collect::<Vec<_>>(),
+        );
         app.set_settings(SettingsData {
             open: self.settings.open,
             tab: self.settings.tab,
@@ -4512,7 +4653,7 @@ impl Studio {
             .into(),
             format: format!("{width} × {height} · {rate:.2} fps").into(),
             duration: {
-                let whole = self.duration().max(0.0) as i32;
+                let whole = self.export_seconds().max(0.0) as i32;
                 format!("{}:{:02}", whole / 60, whole % 60).into()
             },
             contents: if titles > 0 {
@@ -4531,13 +4672,26 @@ impl Studio {
             progress: self.export.progress,
             stage: self.export.stage.as_str().into(),
             eta: if self.export.phase == ExportPhase::Running && self.export.progress > 0.02 {
-                eta((1.0 - self.export.progress) * self.duration().max(1.0) * 2.0).into()
+                eta((1.0 - self.export.progress) * self.export_seconds().max(1.0) * 2.0).into()
             } else {
                 SharedString::new()
             },
             message: self.export.message.as_str().into(),
             done_size: bytes(self.export_size_bytes(self.export.quality)).into(),
             empty: clips == 0,
+            range_mode: self.export.range_mode as i32,
+            range_from: self.export.marker_from as i32,
+            range_to: self.export.marker_to as i32,
+            range_start_text: self.export.custom_start.as_str().into(),
+            range_end_text: self.export.custom_end.as_str().into(),
+            range_note: match self.export_range() {
+                Ok(Some((start, end))) => {
+                    format!("{} – {}", clock(start), clock(end)).into()
+                }
+                Ok(None) => SharedString::new(),
+                Err(reason) => reason.into(),
+            },
+            range_ok: self.export_range().is_ok(),
         }
     }
 
@@ -4730,17 +4884,31 @@ impl Studio {
 
     /// The right-click menu for the empty lanes and the ruler.
     fn timeline_menu(&self) -> Vec<MenuItemData> {
-        vec![MenuItemData {
-            id: "timeline-marker".into(),
-            label: "Add timeline marker at playhead".into(),
+        let row = |id: &str, label: &str, glyph: Glyph| MenuItemData {
+            id: id.into(),
+            label: label.into(),
             kind: MenuRow::Action,
-            glyph: Glyph::Plus,
+            glyph,
             shortcut: SharedString::new(),
             enabled: true,
             danger: false,
             checkable: false,
             checked: false,
-        }]
+        };
+        let mut rows = vec![row(
+            "timeline-marker",
+            "Add timeline marker at playhead",
+            Glyph::Plus,
+        )];
+        if self.range.is_some() {
+            rows.push(MenuItemData {
+                kind: MenuRow::Separator,
+                ..Default::default()
+            });
+            rows.push(row("range-export", "Export selected range…", Glyph::Export));
+            rows.push(row("range-clear", "Clear range selection", Glyph::Close));
+        }
+        rows
     }
 
     pub fn menu_height(rows: &[MenuItemData]) -> f32 {
@@ -5021,7 +5189,19 @@ impl Studio {
 
 #[cfg(test)]
 mod tests {
-    use super::{Footprint, Studio};
+    #[test]
+    fn typed_times_parse_as_clock_or_seconds() {
+        assert_eq!(parse_time("90"), Some(90.0));
+        assert_eq!(parse_time("1:30"), Some(90.0));
+        assert_eq!(parse_time(" 1:30.5 "), Some(90.5));
+        assert_eq!(parse_time("0:01:30"), Some(90.0));
+        assert_eq!(parse_time(""), None);
+        assert_eq!(parse_time("1:"), None);
+        assert_eq!(parse_time("-3"), None);
+        assert_eq!(clock(90.5), "1:30.5");
+    }
+
+    use super::{Footprint, Studio, clock, parse_time};
 
     const FRAME: (u32, u32) = (1920, 1080);
 

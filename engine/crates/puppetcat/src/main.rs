@@ -121,6 +121,7 @@ fn main() -> Result<(), slint::PlatformError> {
         editor.set_tracks(ModelRc::from(models.tracks.clone()));
         editor.set_clips(ModelRc::from(models.clips.clone()));
         editor.set_markers(ModelRc::from(models.markers.clone()));
+        app.set_export_markers(ModelRc::from(models.export_markers.clone()));
         editor.set_stage_items(ModelRc::from(models.stage.clone()));
         editor.set_stage_guides(ModelRc::from(models.guides.clone()));
         editor.set_media(ModelRc::from(models.media.clone()));
@@ -589,7 +590,12 @@ fn main() -> Result<(), slint::PlatformError> {
         state.timeline_menu_token += 1;
     }));
     editor.on_timeline_menu_selected(on_window!(|state, action: SharedString| {
-        if action.as_str() == "timeline-marker" {
+        if action.as_str() == "range-clear" {
+            state.range = None;
+        } else if action.as_str() == "range-export" {
+            state.export.range_mode = 1;
+            state.export.open = true;
+        } else if action.as_str() == "timeline-marker" {
             let at = f64::from(state.playhead);
             state.apply(puppetcat_project::Command::AddMarker {
                 time: at,
@@ -600,6 +606,12 @@ fn main() -> Result<(), slint::PlatformError> {
     }));
 
     // ── the view ──
+    editor.on_range_dragged(on_lanes!(|state, from: f32, to: f32| {
+        state.range = Some((f64::from(from), f64::from(to)));
+    }));
+    editor.on_range_cleared(on_lanes!(|state| {
+        state.range = None;
+    }));
     editor.on_scrubbed(on_lanes!(|state, seconds: f32| {
         state.seek(seconds.max(0.0));
     }));
@@ -902,6 +914,33 @@ fn main() -> Result<(), slint::PlatformError> {
     }));
     app.on_export_rate_changed(on_window!(|state, index: i32| {
         state.export.rate = (index.max(0) as usize).min(2);
+    }));
+    app.on_export_range_mode_changed(on_window!(|state, index: i32| {
+        state.export.range_mode = (index.max(0) as usize).min(3);
+        // Entering the mode with a range already drawn is the common case;
+        // with markers, start from the first two so it is exportable at once.
+        let markers = state.export_markers().len();
+        state.export.marker_from = state.export.marker_from.min(markers.saturating_sub(1));
+        state.export.marker_to = if markers > 1 {
+            state.export.marker_to.clamp(0, markers - 1)
+        } else {
+            0
+        };
+    }));
+    app.on_export_range_marker_changed(on_window!(|state, which: i32, index: i32| {
+        let index = index.max(0) as usize;
+        if which == 0 {
+            state.export.marker_from = index;
+        } else {
+            state.export.marker_to = index;
+        }
+    }));
+    app.on_export_range_time_edited(on_window!(|state, which: i32, text: SharedString| {
+        if which == 0 {
+            state.export.custom_start = text.to_string();
+        } else {
+            state.export.custom_end = text.to_string();
+        }
     }));
     app.on_export_quality_changed(on_window!(|state, index: i32| {
         state.export.quality = (index.max(0) as usize).min(2);

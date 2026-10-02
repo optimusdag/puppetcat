@@ -144,7 +144,11 @@ export component App inherits Window {
     in property <[SystemFactData]> system-facts;
     in property <string> system-report;
 
-    callback export-closed();
+    in property <[string]> export-markers;
+callback export-range-mode-changed(index: int);
+callback export-range-marker-changed(which: int, index: int);
+callback export-range-time-edited(which: int, text: string);
+callback export-closed();
     callback export-name-edited(name: string);
     callback export-browse();
     callback export-resolution-changed(index: int);
@@ -313,7 +317,11 @@ export component App inherits Window {
         width: root.width;
         height: root.height;
         data: root.export;
+        markers: root.export-markers;
 
+        range-mode-changed(index) => { root.export-range-mode-changed(index); }
+        range-marker-changed(which, index) => { root.export-range-marker-changed(which, index); }
+        range-time-edited(which, text) => { root.export-range-time-edited(which, text); }
         closed => { root.export-closed(); }
         name-edited(name) => { root.export-name-edited(name); }
         browse => { root.export-browse(); }

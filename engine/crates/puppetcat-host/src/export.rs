@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-pub use puppetcat_export::{ExportClip, ExportRequest, Reporter, render};
+pub use puppetcat_export::{ExportClip, ExportRange, ExportRequest, Reporter, render};
 
 use crate::AppDirs;
 use crate::jobs::{Job, SingleFlight};
@@ -46,6 +46,9 @@ pub struct ExportSpec {
     pub crf: u8,
     /// The x264 speed/size preset name, e.g. "medium".
     pub preset: String,
+    /// Export only this stretch of the timeline, as `(start, end)` seconds.
+    /// `None` is all of it. See [`puppetcat_export::ExportRequest::range`].
+    pub range: Option<(f64, f64)>,
 }
 
 /// One progress report: which frame of how many, in which stage.
@@ -74,6 +77,7 @@ pub fn request(session: &Session, spec: &ExportSpec, titles: Vec<ExportClip>) ->
         crf: spec.crf,
         preset: spec.preset.clone(),
         clips,
+        range: spec.range.map(|(start, end)| ExportRange { start, end }),
     }
 }
 

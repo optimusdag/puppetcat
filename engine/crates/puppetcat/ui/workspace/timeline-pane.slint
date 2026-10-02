@@ -72,6 +72,10 @@ export component TimelinePane inherits Rectangle {
     in property <[ClipData]> clips;
     in property <[MarkerData]> markers;
     in property <float> playhead;
+    in property <float> range-start: -1;
+    in property <float> range-end: -1;
+    callback range-dragged(from-seconds: float, to-seconds: float);
+    callback range-cleared();
     in property <float> frame-rate: 30;
     in property <float> scroll-left;
     in property <float> seconds-per-pixel: 0.05;
@@ -301,6 +305,10 @@ export component TimelinePane inherits Rectangle {
                 markers: root.markers;
                 tool: root.tool;
                 playhead: root.playhead;
+                range-start: root.range-start;
+                range-end: root.range-end;
+                range-dragged(from-seconds, to-seconds) => { root.range-dragged(from-seconds, to-seconds); }
+                range-cleared => { root.range-cleared(); }
                 frame-rate: root.frame-rate;
                 scroll-left: root.scroll-left;
                 seconds-per-pixel: root.seconds-per-pixel;

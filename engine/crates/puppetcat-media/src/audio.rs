@@ -131,6 +131,15 @@ pub fn tempo_stages(speed: f64) -> Vec<f64> {
 /// rather than treating silence as a stream. The caller decides membership
 /// by probing; this function decides what the mix means.
 pub fn mix_graph(clips: &[AudioClip], duration: f64) -> Result<String> {
+    mix_graph_from(clips, duration, 0.0)
+}
+
+/// [`mix_graph`] for the stretch of the timeline from `skip` to `duration`:
+/// the whole mix is built as usual, so every fade, overlap and retime lands
+/// exactly where it does in the full export, and the head is cut off the
+/// end of the graph. The output is `duration - skip` seconds, restamped
+/// from zero. A `skip` of zero is [`mix_graph`] itself.
+pub fn mix_graph_from(clips: &[AudioClip], duration: f64, skip: f64) -> Result<String> {
     let mut chains: Vec<String> = Vec::new();
 
     for (index, clip) in clips.iter().enumerate() {
@@ -225,8 +234,13 @@ pub fn mix_graph(clips: &[AudioClip], duration: f64) -> Result<String> {
     // stopping condition, independent of that PTS series; the trailing
     // `atrim` stays only as a truncating safety net for the rarer case of
     // the mix already overrunning `duration` before `apad` is reached.
+    let head = if skip > 0.0 {
+        format!(",atrim=start={skip:.6},asetpts=PTS-STARTPTS")
+    } else {
+        String::new()
+    };
     chains.push(format!(
-        "{mix};[mixed]aresample={MIX_RATE},apad=whole_dur={duration:.6},atrim=duration={duration:.6}[out]"
+        "{mix};[mixed]aresample={MIX_RATE},apad=whole_dur={duration:.6},atrim=duration={duration:.6}{head}[out]"
     ));
 
     Ok(chains.join(";"))
@@ -292,6 +306,17 @@ impl MixInput {
 ///
 /// Every clip's file must contain an audio stream; see [`mix_graph`].
 pub fn mix_to_file(clips: &[AudioClip], duration: f64, destination: &Path) -> Result<()> {
+    mix_to_file_from(clips, duration, 0.0, destination)
+}
+
+/// [`mix_to_file`] for the stretch from `skip` to `duration`; see
+/// [`mix_graph_from`].
+pub fn mix_to_file_from(
+    clips: &[AudioClip],
+    duration: f64,
+    skip: f64,
+    destination: &Path,
+) -> Result<()> {
     ffi::init();
     let missing = |name: &str| Error::Missing {
         what: "filter",
@@ -389,7 +414,7 @@ pub fn mix_to_file(clips: &[AudioClip], duration: f64, destination: &Path) -> Re
         )
         .map_err(|error| ffi::fail("buffer sink", destination, error))?;
 
-    let graph_spec = mix_graph(&trimmed_clips, duration)?;
+    let graph_spec = mix_graph_from(&trimmed_clips, duration, skip)?;
     // The plan's `[out]` lands on the encoder's own format before the sink.
     let spec = format!(
         "{graph_spec};[out]aformat=sample_fmts=fltp:sample_rates={MIX_RATE}:channel_layouts=stereo[sink]"
@@ -806,6 +831,22 @@ mod tests {
     }
 
     #[test]
+    fn a_skipped_head_is_cut_after_the_whole_mix_is_built() {
+        let graph = mix_graph_from(&[clip("a.mp4")], 4.5, 1.5).expect("valid");
+        assert!(
+            graph.ends_with(
+                "apad=whole_dur=4.500000,atrim=duration=4.500000,atrim=start=1.500000,asetpts=PTS-STARTPTS[out]"
+            ),
+            "graph was: {graph}"
+        );
+        assert_eq!(
+            mix_graph_from(&[clip("a.mp4")], 4.5, 0.0).unwrap(),
+            mix_graph(&[clip("a.mp4")], 4.5).unwrap(),
+            "no skip is the plain mix"
+        );
+    }
+
+    #[test]
     fn a_sped_up_clip_trims_more_source_than_its_timeline_length() {
         let mut fast = clip("a.mp4");
         fast.speed = 2.0;
@@ -856,7 +897,6 @@ mod tests {
             assert!(validate_chain(good).is_ok(), "{good:?} should be fine");
         }
     }
-}
 
     /// End to end against a real FFmpeg: video is one packet per frame,
     /// AAC is one packet per ~1024 samples - a different rate, so 5s of
@@ -946,3 +986,4 @@ mod tests {
         let _ = std::fs::remove_file(&audio_path);
         let _ = std::fs::remove_file(&out_path);
     }
+}

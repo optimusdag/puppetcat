@@ -56,6 +56,126 @@ pub struct EditPlanResult {
     pub duration_after: f64,
     /// Validation of the staged result, when requested.
     pub validation: Option<ValidationReport>,
+    /// What changed, by object: added, removed, or which fields moved
+    /// (old -> new). Capped; see `diff_truncated`.
+    pub diff: Vec<DiffEntry>,
+    /// True when more changed than `diff` lists.
+    pub diff_truncated: bool,
+}
+
+/// One changed object in an edit plan's diff.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffEntry {
+    /// `clip`, `marker`, `media` or `track`.
+    pub object: &'static str,
+    /// The object's id.
+    pub id: String,
+    /// `added`, `removed` or `changed`.
+    pub change: &'static str,
+    /// For `changed`: `field: old -> new`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+}
+
+const DIFF_LIMIT: usize = 100;
+
+fn diff_projects(
+    before: &puppetcat_project::Project,
+    after: &puppetcat_project::Project,
+) -> (Vec<DiffEntry>, bool) {
+    use serde_json::Value;
+    fn index<T: serde::Serialize>(items: &[T], id: impl Fn(&T) -> &str) -> Vec<(String, Value)> {
+        items
+            .iter()
+            .map(|item| {
+                (
+                    id(item).to_owned(),
+                    serde_json::to_value(item).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+    fn compare(
+        object: &'static str,
+        before: Vec<(String, Value)>,
+        after: Vec<(String, Value)>,
+        out: &mut Vec<DiffEntry>,
+    ) {
+        for (id, old) in &before {
+            match after.iter().find(|(other, _)| other == id) {
+                None => out.push(DiffEntry {
+                    object,
+                    id: id.clone(),
+                    change: "removed",
+                    fields: vec![],
+                }),
+                Some((_, new)) if new != old => {
+                    let (Some(old), Some(new)) = (old.as_object(), new.as_object()) else {
+                        continue;
+                    };
+                    let mut keys: Vec<&String> = old.keys().chain(new.keys()).collect();
+                    keys.sort();
+                    keys.dedup();
+                    let fields = keys
+                        .into_iter()
+                        .filter(|key| old.get(*key) != new.get(*key))
+                        .map(|key| {
+                            let show =
+                                |v: Option<&Value>| v.map_or("none".to_owned(), |v| v.to_string());
+                            format!("{key}: {} -> {}", show(old.get(key)), show(new.get(key)))
+                        })
+                        .collect();
+                    out.push(DiffEntry {
+                        object,
+                        id: id.clone(),
+                        change: "changed",
+                        fields,
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+        for (id, _) in &after {
+            if !before.iter().any(|(other, _)| other == id) {
+                out.push(DiffEntry {
+                    object,
+                    id: id.clone(),
+                    change: "added",
+                    fields: vec![],
+                });
+            }
+        }
+    }
+    let (old, new) = (before.active(), after.active());
+    let mut out = Vec::new();
+    compare(
+        "clip",
+        index(&old.clips, |c| &c.id),
+        index(&new.clips, |c| &c.id),
+        &mut out,
+    );
+    compare(
+        "marker",
+        index(&old.markers, |m| &m.id),
+        index(&new.markers, |m| &m.id),
+        &mut out,
+    );
+    compare(
+        "track",
+        index(&old.tracks, |t| &t.id),
+        index(&new.tracks, |t| &t.id),
+        &mut out,
+    );
+    compare(
+        "media",
+        index(&before.media, |m| &m.id),
+        index(&after.media, |m| &m.id),
+        &mut out,
+    );
+    let truncated = out.len() > DIFF_LIMIT;
+    out.truncate(DIFF_LIMIT);
+    (out, truncated)
 }
 
 /// Replaces every string equal to `$name` with the id that reference
@@ -352,6 +472,7 @@ impl AgentEngine {
         } else {
             None
         };
+        let (diff, diff_truncated) = diff_projects(before, &staged.project);
         let created_ids = staged.created_ids.clone();
         let changed = staged.applied;
         if !dry_run {
@@ -374,6 +495,8 @@ impl AgentEngine {
             duration_before,
             duration_after,
             validation,
+            diff,
+            diff_truncated,
         })
     }
 
@@ -1458,6 +1581,108 @@ mod tests {
         skipping.collision = "skip".to_owned();
         let plan = agent.start_batch_export(skipping).unwrap();
         assert!(plan.items[0].skip && !plan.items[1].skip);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ripple_delete_follows_its_policies_and_the_plan_reports_a_diff() {
+        use serde_json::json;
+        let (root, agent, first) = project_with_clip("ripple");
+        let media = agent.get_state().unwrap().project.media[0].id.clone();
+        let add = |start: f64| {
+            agent
+                .apply(Command::AddClip {
+                    media_id: media.clone(),
+                    track_id: "T1".to_owned(),
+                    start,
+                })
+                .unwrap()
+                .created_id
+                .unwrap()
+        };
+        let second = add(10.0);
+        let third = add(20.0);
+        agent
+            .apply(Command::AddMarker {
+                time: 25.0,
+                name: Some("free".to_owned()),
+                clip_id: None,
+            })
+            .unwrap();
+        let start_of = |id: &str| {
+            agent
+                .get_state()
+                .unwrap()
+                .project
+                .active()
+                .clips
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.start)
+        };
+        let marker_time = || agent.get_state().unwrap().project.active().markers[0].time;
+
+        let revision = agent.get_state().unwrap().revision;
+        let op = |marker: &str| json!({"op": "rippleDelete", "clipIds": [second.clone()], "markerPolicy": marker});
+        let plan = agent
+            .apply_edit_plan(revision, vec![op("shiftFree")], false, true)
+            .expect("plan");
+        assert_eq!(start_of(&second), None);
+        assert_eq!(start_of(&first), Some(0.0));
+        assert_eq!(start_of(&third), Some(10.0), "later clips close the gap");
+        assert_eq!(marker_time(), 15.0, "free markers shift");
+        assert!(
+            plan.diff
+                .iter()
+                .any(|d| d.id == second && d.change == "removed")
+        );
+        let moved = plan
+            .diff
+            .iter()
+            .find(|d| d.id == third)
+            .expect("third changed");
+        assert!(moved.fields.iter().any(|f| f.starts_with("start:")));
+
+        // Undo restores everything, and a fixed marker policy leaves markers.
+        agent.undo().unwrap();
+        assert_eq!(start_of(&third), Some(20.0));
+        let revision = agent.get_state().unwrap().revision;
+        agent
+            .apply_edit_plan(revision, vec![op("fixed")], false, true)
+            .unwrap();
+        assert_eq!(marker_time(), 25.0);
+
+        // No ripple leaves the gap.
+        agent.undo().unwrap();
+        let revision = agent.get_state().unwrap().revision;
+        let none =
+            json!({"op": "rippleDelete", "clipIds": [second.clone()], "ripplePolicy": "none"});
+        agent
+            .apply_edit_plan(revision, vec![none], false, true)
+            .unwrap();
+        assert_eq!(start_of(&third), Some(20.0));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reopening_a_project_never_reuses_an_old_revision() {
+        let (root, agent, _clip) = project_with_clip("epoch");
+        let path = agent
+            .get_state()
+            .map(|_| ())
+            .and(Ok::<_, String>(()))
+            .and_then(|_| {
+                agent
+                    .list_recent_projects()
+                    .first()
+                    .map(|p| p.path.clone())
+                    .ok_or("none".to_owned())
+            })
+            .unwrap();
+        let before = agent.get_state().unwrap().revision;
+        agent.close_project().unwrap();
+        agent.open_project(&path).unwrap();
+        assert_ne!(agent.get_state().unwrap().revision, before);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

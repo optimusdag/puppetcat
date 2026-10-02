@@ -19,6 +19,13 @@ use crate::model::Project;
 
 const UNDO_DEPTH: usize = 200;
 
+/// Each editor starts its revision in its own epoch, so a plan built against
+/// one open of a project can never match a later reopen of it.
+fn next_epoch() -> u64 {
+    static EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    (EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1) << 32
+}
+
 /// One editing session: the project, the id mint that keeps its ids unique,
 /// and the undo/redo stacks. This is the object a host holds per open
 /// project; everything else in the crate is reachable through it.
@@ -72,7 +79,7 @@ impl Editor {
             mint: IdMint::default(),
             undo: VecDeque::new(),
             redo: Vec::new(),
-            revision: 0,
+            revision: next_epoch(),
         }
     }
 
@@ -88,7 +95,7 @@ impl Editor {
             mint,
             undo: VecDeque::new(),
             redo: Vec::new(),
-            revision: 0,
+            revision: next_epoch(),
         })
     }
 

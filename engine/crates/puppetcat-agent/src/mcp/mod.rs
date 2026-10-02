@@ -633,6 +633,11 @@ impl ConcatAgentServer {
                 "editPlans": true,
                 "editPlanClientRefs": true,
                 "editPlanDryRun": true,
+                "editPlanDiff": true,
+                "rippleDelete": true,
+                "batchExport": true,
+                "layoutTemplates": true,
+                "mediaRelink": true,
             },
             "limits": {
                 "contactSheetFrames": crate::snapshot::MAX_CONTACT_SHEET_FRAMES,
@@ -1293,7 +1298,7 @@ impl ConcatAgentServer {
     }
 
     #[tool(
-        description = "Apply several commands as one transaction. Requires `expectedRevision` (the `revision` of the latest state); a stale value is rejected. The plan is staged on a copy, validated, then committed as a single undo step - any failure commits nothing. Use `dryRun` to preview: returns old/new revision, per-operation `createdIds`, clip/marker/media deltas, duration change and the validation report."
+        description = "Apply several commands as one transaction. Requires `expectedRevision` (the `revision` of the latest state); a stale value is rejected. The plan is staged on a copy, validated, then committed as a single undo step - any failure commits nothing. Use `dryRun` to preview: returns old/new revision, per-operation `createdIds`, `refs`, clip/marker/media deltas, duration change, the validation report and a field-level `diff`. Includes the curated op `rippleDelete` ({clipIds, ripplePolicy: none|selectedTracks|allTracks, linkPolicy: preserve|detach|explicit, markerPolicy: attachedOnly|shiftFree|fixed})."
     )]
     fn apply_edit_plan(
         &self,

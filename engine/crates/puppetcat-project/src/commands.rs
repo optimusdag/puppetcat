@@ -7,7 +7,7 @@
 //! meaning lives. The clamps and tolerances documented on each variant are
 //! the contract the window's gesture echo mirrors and tests against.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +54,45 @@ pub enum TrackFlag {
     Visible,
     /// [`Track::muted`]: whether the track's audio is silenced.
     Muted,
+}
+
+/// Which lanes close up after a ripple delete.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RipplePolicy {
+    /// Leave a gap.
+    None,
+    /// Close the gap on the lanes the deleted clips sat on.
+    #[default]
+    SelectedTracks,
+    /// Close it on every lane.
+    AllTracks,
+}
+
+/// What happens to a video clip's detached audio (and the reverse).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LinkPolicy {
+    /// Linked partners are deleted and shifted together.
+    #[default]
+    Preserve,
+    /// Partners of deleted clips stay, unlinked.
+    Detach,
+    /// Only the named clips are touched; partners are left alone.
+    Explicit,
+}
+
+/// Where markers go when the gap closes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MarkerPolicy {
+    /// Markers attached to clips ride with them; free markers stay put.
+    AttachedOnly,
+    /// Attached markers ride with clips and free markers shift too.
+    #[default]
+    ShiftFree,
+    /// No marker changes its time: attached markers are let go first.
+    Fixed,
 }
 
 /// Where one clip is going, in a multi-clip move.
@@ -445,6 +484,22 @@ pub enum Command {
         /// unknown id leaves the marker free-floating.
         #[serde(default)]
         clip_id: Option<String>,
+    },
+    /// Deletes clips and closes the gap they leave, under explicit policies
+    /// for which lanes close up, what happens to linked audio, and how
+    /// markers move. All of it is one edit.
+    RippleDelete {
+        /// The clips to delete. Unknown ids are ignored.
+        clip_ids: Vec<String>,
+        /// Which lanes close the gap.
+        #[serde(default)]
+        ripple_policy: RipplePolicy,
+        /// What becomes of linked audio.
+        #[serde(default)]
+        link_policy: LinkPolicy,
+        /// What markers do.
+        #[serde(default)]
+        marker_policy: MarkerPolicy,
     },
     /// Saves a layout under its name, replacing one of the same name. A blank
     /// name is a no-op.
@@ -1846,6 +1901,134 @@ fn apply_command(
             Ok(Outcome {
                 created_id: None,
                 applied,
+            })
+        }
+
+        Command::RippleDelete {
+            clip_ids,
+            ripple_policy,
+            link_policy,
+            marker_policy,
+        } => {
+            let timeline = project.active_mut();
+            let mut doomed: HashSet<String> = clip_ids
+                .into_iter()
+                .filter(|id| timeline.clip(id).is_some())
+                .collect();
+            if doomed.is_empty() {
+                return Ok(Outcome::default());
+            }
+            let children: Vec<String> = timeline
+                .clips
+                .iter()
+                .filter(|clip| {
+                    clip.detached_from
+                        .as_ref()
+                        .is_some_and(|parent| doomed.contains(parent))
+                })
+                .map(|clip| clip.id.clone())
+                .collect();
+            match link_policy {
+                LinkPolicy::Preserve => doomed.extend(children),
+                LinkPolicy::Detach => {
+                    for clip in &mut timeline.clips {
+                        if children.contains(&clip.id) && !doomed.contains(&clip.id) {
+                            clip.detached_from = None;
+                        }
+                    }
+                }
+                LinkPolicy::Explicit => {}
+            }
+
+            // The deleted spans, merged, and the lanes that close up.
+            let mut spans: Vec<(f64, f64)> = timeline
+                .clips
+                .iter()
+                .filter(|clip| doomed.contains(&clip.id))
+                .map(|clip| (clip.start, clip.start + clip.duration))
+                .collect();
+            let lanes: HashSet<String> = timeline
+                .clips
+                .iter()
+                .filter(|clip| doomed.contains(&clip.id))
+                .map(|clip| clip.track_id.clone())
+                .collect();
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut merged: Vec<(f64, f64)> = Vec::new();
+            for span in spans {
+                match merged.last_mut() {
+                    Some(last) if span.0 <= last.1 => last.1 = last.1.max(span.1),
+                    _ => merged.push(span),
+                }
+            }
+            let covered = |time: f64| -> f64 {
+                merged
+                    .iter()
+                    .map(|(start, end)| (time.min(*end) - start).max(0.0))
+                    .sum()
+            };
+
+            timeline.clips.retain(|clip| !doomed.contains(&clip.id));
+            if ripple_policy != RipplePolicy::None {
+                let on_lane = |clip: &Clip| match ripple_policy {
+                    RipplePolicy::AllTracks => true,
+                    _ => lanes.contains(&clip.track_id),
+                };
+                let mut shifts: HashMap<String, f64> = timeline
+                    .clips
+                    .iter()
+                    .filter(|clip| on_lane(clip))
+                    .map(|clip| (clip.id.clone(), covered(clip.start)))
+                    .collect();
+                if link_policy == LinkPolicy::Preserve {
+                    let partners: Vec<(String, f64)> = timeline
+                        .clips
+                        .iter()
+                        .filter_map(|clip| {
+                            let parent = clip.detached_from.as_ref()?;
+                            if shifts.contains_key(&clip.id) {
+                                return None;
+                            }
+                            shifts.get(parent).map(|shift| (clip.id.clone(), *shift))
+                        })
+                        .chain(timeline.clips.iter().filter_map(|clip| {
+                            let child = timeline.clips.iter().find(|other| {
+                                other.detached_from.as_deref() == Some(clip.id.as_str())
+                            })?;
+                            if shifts.contains_key(&child.id) {
+                                return None;
+                            }
+                            shifts.get(&clip.id).map(|shift| (child.id.clone(), *shift))
+                        }))
+                        .collect();
+                    shifts.extend(partners);
+                }
+                if marker_policy == MarkerPolicy::Fixed {
+                    for marker in &mut timeline.markers {
+                        if marker
+                            .clip_id
+                            .as_ref()
+                            .is_some_and(|id| shifts.get(id).is_some_and(|s| *s > 0.0))
+                        {
+                            marker.clip_id = None;
+                            marker.offset = 0.0;
+                        }
+                    }
+                }
+                for clip in &mut timeline.clips {
+                    if let Some(shift) = shifts.get(&clip.id) {
+                        clip.start = (clip.start - shift).max(0.0);
+                    }
+                }
+                if marker_policy == MarkerPolicy::ShiftFree {
+                    for marker in timeline.markers.iter_mut().filter(|m| m.clip_id.is_none()) {
+                        marker.time = (marker.time - covered(marker.time)).max(0.0);
+                    }
+                }
+            }
+            Ok(Outcome {
+                created_id: None,
+                applied: true,
             })
         }
 

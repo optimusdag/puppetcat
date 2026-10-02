@@ -481,6 +481,42 @@ impl ConcatAgentServer {
         }
     }
 
+    // ── introspection ──
+
+    #[tool(
+        description = "What this server supports: version, schema version, every tool name, feature flags and limits. Call it once to check compatibility instead of probing for tools."
+    )]
+    fn get_capabilities(&self) -> Result<CallToolResult, McpError> {
+        let mut tools: Vec<String> = self
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        tools.sort();
+        ok_json(&serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "schemaVersion": 1,
+            "tools": tools,
+            "features": {
+                "revisionTokens": true,
+                "editPlans": true,
+                "editPlanClientRefs": true,
+                "editPlanDryRun": true,
+            },
+            "limits": {
+                "contactSheetFrames": crate::snapshot::MAX_CONTACT_SHEET_FRAMES,
+            },
+        }))
+    }
+
+    #[tool(
+        description = "Run diagnostics: config and scratch directories writable, and whether a project is open. Each check has a stable `code` and, on failure, a `remediation`."
+    )]
+    fn health_check(&self) -> Result<CallToolResult, McpError> {
+        ok_json(&self.engine.health_check())
+    }
+
     // ── project lifecycle ──
 
     #[tool(

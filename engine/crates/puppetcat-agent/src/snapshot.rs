@@ -20,6 +20,9 @@ use puppetcat_host::{Session, Titles};
 use puppetcat_media::ReaderPool;
 use serde::Serialize;
 
+/// Most frames one contact sheet may hold.
+pub const MAX_CONTACT_SHEET_FRAMES: usize = 64;
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContactSheetCell {
@@ -142,8 +145,10 @@ pub fn render_contact_sheet(
     if times.is_empty() {
         return Err("times must contain at least one timeline instant".to_owned());
     }
-    if times.len() > 64 {
-        return Err("a contact sheet is limited to 64 frames".to_owned());
+    if times.len() > MAX_CONTACT_SHEET_FRAMES {
+        return Err(format!(
+            "a contact sheet is limited to {MAX_CONTACT_SHEET_FRAMES} frames"
+        ));
     }
     if times.iter().any(|time| !time.is_finite() || *time < 0.0) {
         return Err("every time must be a finite non-negative number".to_owned());

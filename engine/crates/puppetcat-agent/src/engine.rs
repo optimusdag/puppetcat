@@ -78,6 +78,42 @@ fn substitute_refs(
     }
 }
 
+/// One diagnostic from [`AgentEngine::health_check`]. `code` is stable and
+/// machine-readable; `remediation` says what to do when `ok` is false.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthCheck {
+    /// What was checked.
+    pub name: &'static str,
+    /// Stable identifier of the outcome, e.g. `config_dir_unwritable`.
+    pub code: &'static str,
+    /// Whether the check passed.
+    pub ok: bool,
+    /// Human-readable detail.
+    pub message: String,
+    /// What to do about a failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<&'static str>,
+}
+
+/// The result of [`AgentEngine::health_check`].
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthReport {
+    /// True when every check passed.
+    pub healthy: bool,
+    /// Per-check results.
+    pub checks: Vec<HealthCheck>,
+}
+
+fn writable(dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    let probe = dir.join(format!(".puppetcat-health-{}", std::process::id()));
+    std::fs::write(&probe, b"ok").map_err(|error| error.to_string())?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
 fn shape(project: &puppetcat_project::Project) -> (usize, usize, usize, f64) {
     let timeline = project.active();
     (
@@ -332,6 +368,63 @@ impl AgentEngine {
             duration_after,
             validation,
         })
+    }
+
+    /// Checks what an edit session depends on - writable app and scratch
+    /// directories, the active project and its lock - and reports each as a
+    /// coded result. There are no external encoders or probes to find: media
+    /// is decoded and encoded in-process.
+    pub fn health_check(&self) -> HealthReport {
+        let mut checks = Vec::new();
+        let mut dir_check = |name, ok_code, bad_code, dir: &Path, fix| {
+            let result = writable(dir);
+            let ok = result.is_ok();
+            checks.push(HealthCheck {
+                name,
+                code: if ok { ok_code } else { bad_code },
+                ok,
+                message: match result {
+                    Ok(()) => format!("{} is writable", dir.display()),
+                    Err(error) => format!("{}: {error}", dir.display()),
+                },
+                remediation: Some(fix).filter(|_| !ok),
+            });
+        };
+        dir_check(
+            "config directory",
+            "config_dir_ok",
+            "config_dir_unwritable",
+            &self.dirs.config,
+            "Fix permissions on the config directory so recents can be saved.",
+        );
+        dir_check(
+            "scratch directory",
+            "scratch_dir_ok",
+            "scratch_dir_unwritable",
+            &std::env::temp_dir(),
+            "Free space or fix permissions on the system temp directory.",
+        );
+        let guard = self.session_lock();
+        checks.push(match guard.as_ref() {
+            Some(open) => HealthCheck {
+                name: "active project",
+                code: "project_open",
+                ok: true,
+                message: format!("{} is open and locked by this agent", open.session.path()),
+                remediation: None,
+            },
+            None => HealthCheck {
+                name: "active project",
+                code: "no_project",
+                ok: true,
+                message: "no project is open".to_owned(),
+                remediation: None,
+            },
+        });
+        HealthReport {
+            healthy: checks.iter().all(|check| check.ok),
+            checks,
+        }
     }
 
     /// Undoes the last applied edit.
@@ -1063,6 +1156,16 @@ mod tests {
             agent.get_state().unwrap().project.active().tracks.len(),
             tracks
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn health_check_reports_coded_results() {
+        let root = scratch("health");
+        let agent = engine(&root);
+        let report = agent.health_check();
+        assert!(report.healthy);
+        assert!(report.checks.iter().any(|check| check.code == "no_project"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

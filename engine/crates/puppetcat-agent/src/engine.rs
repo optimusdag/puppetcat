@@ -20,6 +20,45 @@ use crate::analysis::{self, AudioAnalysis, FeatureBucket};
 use crate::export::{ExportJob, ExportStatus};
 use crate::query::{self, TimelineSummary, ValidationReport};
 
+/// What `apply_edit_plan` reports: enough to confirm a plan did what was
+/// meant without re-reading the project.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditPlanResult {
+    /// Whether the plan changed the live project.
+    pub committed: bool,
+    /// Echo of the request flag.
+    pub dry_run: bool,
+    /// Revision the plan was staged from.
+    pub old_revision: u64,
+    /// Revision after the call; unchanged for a dry run or no-op.
+    pub new_revision: u64,
+    /// One entry per operation, in order: the id it minted, if any.
+    pub created_ids: Vec<Option<String>>,
+    /// Net clips added to the active timeline.
+    pub clips_delta: i64,
+    /// Net markers added to the active timeline.
+    pub markers_delta: i64,
+    /// Net media items added to the bin.
+    pub media_delta: i64,
+    /// Active timeline length before, seconds.
+    pub duration_before: f64,
+    /// Active timeline length after, seconds.
+    pub duration_after: f64,
+    /// Validation of the staged result, when requested.
+    pub validation: Option<ValidationReport>,
+}
+
+fn shape(project: &puppetcat_project::Project) -> (usize, usize, usize, f64) {
+    let timeline = project.active();
+    (
+        timeline.clips.len(),
+        timeline.markers.len(),
+        project.media.len(),
+        timeline.duration(),
+    )
+}
+
 /// A session plus the cross-process claim that makes it safe to edit: for as
 /// long as this exists, no `puppetcat` window will accept input on the same
 /// project (see `puppetcat_host::lock`). Bundled with the session, not held
@@ -165,6 +204,74 @@ impl AgentEngine {
         let mut guard = self.session_lock();
         let session = guard.as_mut().ok_or_else(no_project)?;
         session.apply(command)
+    }
+
+    /// Runs a list of commands as one transaction against an expected
+    /// revision. The plan is staged on a copy, validated, and only then
+    /// committed as a single undo step; any failure - stale revision, a bad
+    /// command, a newly introduced validation error - commits nothing.
+    /// `dry_run` stages and reports without committing.
+    pub fn apply_edit_plan(
+        &self,
+        expected_revision: u64,
+        commands: Vec<Command>,
+        dry_run: bool,
+        validate: bool,
+    ) -> Result<EditPlanResult, String> {
+        let mut guard = self.session_lock();
+        let session = guard.as_mut().ok_or_else(no_project)?;
+        let old_revision = session.revision();
+        if expected_revision != old_revision {
+            return Err(format!(
+                "stale revision: expected {expected_revision}, project is at {old_revision}; \
+                 re-read state and rebuild the plan"
+            ));
+        }
+        let staged = session.stage(commands)?;
+        let before = session.project();
+        let (clips_before, markers_before, media_before, duration_before) = shape(before);
+        let (clips_after, markers_after, media_after, duration_after) = shape(&staged.project);
+        let validation = if validate {
+            let report = query::validate(&staged.project, None)?;
+            let baseline = query::validate(before, None)?;
+            if report.errors > baseline.errors {
+                return Err(format!(
+                    "plan rejected: it introduces {} validation error(s); first: {}",
+                    report.errors - baseline.errors,
+                    report
+                        .issues
+                        .iter()
+                        .find(|issue| issue.severity == "error")
+                        .map(|issue| issue.message.as_str())
+                        .unwrap_or("unknown")
+                ));
+            }
+            Some(report)
+        } else {
+            None
+        };
+        let created_ids = staged.created_ids.clone();
+        let changed = staged.applied;
+        if !dry_run {
+            session.commit(staged);
+        }
+        Ok(EditPlanResult {
+            committed: !dry_run && changed,
+            dry_run,
+            old_revision,
+            new_revision: if dry_run || !changed {
+                old_revision
+            } else {
+                session.revision()
+            },
+            created_ids,
+            clips_delta: clips_after as i64 - clips_before as i64,
+            markers_delta: markers_after as i64 - markers_before as i64,
+            media_delta: media_after as i64 - media_before as i64,
+            duration_before,
+            duration_after,
+            validation,
+        })
     }
 
     /// Undoes the last applied edit.

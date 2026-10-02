@@ -366,6 +366,21 @@ pub struct RemoveMarkerParams {
     pub marker_id: String,
 }
 
+/// Parameters for `apply_edit_plan`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyEditPlanParams {
+    /// The `revision` from the latest state response. A mismatch rejects the
+    /// plan before anything is touched.
+    pub expected_revision: u64,
+    /// Commands in order, each shaped like `apply_raw_command`'s `command`.
+    pub operations: Vec<serde_json::Value>,
+    /// Stage and report without committing. Default false.
+    pub dry_run: Option<bool>,
+    /// Reject plans that introduce validation errors. Default true.
+    pub validate: Option<bool>,
+}
+
 /// Parameters for `apply_raw_command`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -891,6 +906,33 @@ impl ConcatAgentServer {
     ) -> Result<CallToolResult, McpError> {
         let command = parse_raw_command(params.command).map_err(to_mcp_err)?;
         ok_state(self.engine.apply(command))
+    }
+
+    #[tool(
+        description = "Apply several commands as one transaction. Requires `expectedRevision` (the `revision` of the latest state); a stale value is rejected. The plan is staged on a copy, validated, then committed as a single undo step - any failure commits nothing. Use `dryRun` to preview: returns old/new revision, per-operation `createdIds`, clip/marker/media deltas, duration change and the validation report."
+    )]
+    fn apply_edit_plan(
+        &self,
+        Parameters(params): Parameters<ApplyEditPlanParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let commands = params
+            .operations
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                parse_raw_command(value).map_err(|error| format!("operation {index}: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_mcp_err)?;
+        self.engine
+            .apply_edit_plan(
+                params.expected_revision,
+                commands,
+                params.dry_run.unwrap_or(false),
+                params.validate.unwrap_or(true),
+            )
+            .map_err(to_mcp_err)
+            .and_then(|result| ok_json(&result))
     }
 
     // ── history ──

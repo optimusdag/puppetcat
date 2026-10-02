@@ -41,6 +41,8 @@ pub struct EditorView {
     /// The id a creating command minted, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_id: Option<String>,
+    /// The change counter an optimistic-concurrency check compares.
+    pub revision: u64,
 }
 
 /// The session's settings, as the window shows them.
@@ -175,6 +177,7 @@ impl Session {
                 rate_den: self.settings.rate_den,
             },
             created_id,
+            revision: self.editor.revision(),
         }
     }
 
@@ -185,6 +188,24 @@ impl Session {
             .apply(command)
             .map_err(|error| error.to_string())?;
         Ok(self.view_with(outcome.created_id))
+    }
+
+    /// The editor's change counter.
+    pub fn revision(&self) -> u64 {
+        self.editor.revision()
+    }
+
+    /// Stages a plan without touching the session.
+    pub fn stage(&self, commands: Vec<Command>) -> Result<puppetcat_project::Staged, String> {
+        self.editor
+            .stage(commands)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Makes a staged plan live as one undo step.
+    pub fn commit(&mut self, staged: puppetcat_project::Staged) -> EditorView {
+        self.editor.commit(staged);
+        self.view()
     }
 
     /// Steps the history back one edit.

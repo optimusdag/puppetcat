@@ -29,6 +29,21 @@ pub struct Editor {
     /// the front in constant time, where a Vec would shuffle the whole stack.
     undo: VecDeque<Project>,
     redo: Vec<Project>,
+    /// Bumped by every successful mutation, undo and redo, so a caller can
+    /// detect that the state moved since it last looked.
+    revision: u64,
+}
+
+/// A plan applied to a copy of the session: nothing is live until
+/// [`Editor::commit`] takes it.
+pub struct Staged {
+    /// The project as it would be after every command.
+    pub project: Project,
+    mint: IdMint,
+    /// Per command, the id it minted, if any.
+    pub created_ids: Vec<Option<String>>,
+    /// Whether any command changed anything.
+    pub applied: bool,
 }
 
 impl Editor {
@@ -39,6 +54,7 @@ impl Editor {
             mint: IdMint::default(),
             undo: VecDeque::new(),
             redo: Vec::new(),
+            revision: 0,
         }
     }
 
@@ -54,6 +70,7 @@ impl Editor {
             mint,
             undo: VecDeque::new(),
             redo: Vec::new(),
+            revision: 0,
         })
     }
 
@@ -78,8 +95,51 @@ impl Editor {
                 self.undo.pop_front();
             }
             self.redo.clear();
+            self.revision += 1;
         }
         Ok(outcome)
+    }
+
+    /// The change counter; differs after every edit, undo and redo.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Applies `commands` in order to a copy, leaving the session untouched.
+    /// The first failing command aborts the whole plan.
+    pub fn stage(&self, commands: Vec<Command>) -> Result<Staged, CommandError> {
+        let mut project = self.project.clone();
+        let mut mint = self.mint.clone();
+        let mut created_ids = Vec::with_capacity(commands.len());
+        let mut applied = false;
+        for command in commands {
+            let outcome = apply(&mut project, &mut mint, command)?;
+            applied |= outcome.applied;
+            created_ids.push(outcome.created_id);
+        }
+        Ok(Staged {
+            project,
+            mint,
+            created_ids,
+            applied,
+        })
+    }
+
+    /// Makes a staged plan live as one undo step. The caller must have
+    /// staged it from the current revision; a plan that changed nothing is
+    /// ignored.
+    pub fn commit(&mut self, staged: Staged) {
+        if !staged.applied {
+            return;
+        }
+        let before = std::mem::replace(&mut self.project, staged.project);
+        self.mint = staged.mint;
+        self.undo.push_back(before);
+        if self.undo.len() > UNDO_DEPTH {
+            self.undo.pop_front();
+        }
+        self.redo.clear();
+        self.revision += 1;
     }
 
     /// Steps back one edit. Returns whether anything changed.
@@ -88,6 +148,7 @@ impl Editor {
             Some(previous) => {
                 self.redo
                     .push(std::mem::replace(&mut self.project, previous));
+                self.revision += 1;
                 true
             }
             None => false,
@@ -100,6 +161,7 @@ impl Editor {
             Some(next) => {
                 self.undo
                     .push_back(std::mem::replace(&mut self.project, next));
+                self.revision += 1;
                 true
             }
             None => false,
@@ -127,5 +189,29 @@ impl Editor {
 impl Default for Editor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_staged_plan_changes_nothing_until_committed_and_undoes_as_one_step() {
+        let mut editor = Editor::new();
+        let start = editor.revision();
+        let staged = editor
+            .stage(vec![Command::AddTrack, Command::AddTrack])
+            .expect("stages");
+        assert!(staged.applied);
+        assert_eq!(editor.revision(), start);
+        let tracks = editor.project().active().tracks.len();
+        assert_eq!(staged.project.active().tracks.len(), tracks + 2);
+
+        editor.commit(staged);
+        assert_ne!(editor.revision(), start);
+        assert_eq!(editor.project().active().tracks.len(), tracks + 2);
+        assert!(editor.undo());
+        assert_eq!(editor.project().active().tracks.len(), tracks);
     }
 }

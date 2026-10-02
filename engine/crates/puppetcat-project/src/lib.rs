@@ -30,7 +30,7 @@ pub mod speed;
 
 pub use commands::{Command, CommandError, Outcome, why_not_merge};
 pub use doc::{DocumentSettings, from_document, to_document};
-pub use editor::{Editor, Staged};
+pub use editor::{Editor, StageError, Staged};
 pub use model::Project;
 
 #[cfg(test)]

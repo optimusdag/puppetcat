@@ -374,6 +374,8 @@ pub struct ApplyEditPlanParams {
     /// plan before anything is touched.
     pub expected_revision: u64,
     /// Commands in order, each shaped like `apply_raw_command`'s `command`.
+    /// An operation may carry `"ref": "name"`; if it mints an id, later
+    /// operations can write `"$name"` anywhere a string id is expected.
     pub operations: Vec<serde_json::Value>,
     /// Stage and report without committing. Default false.
     pub dry_run: Option<bool>,
@@ -915,19 +917,10 @@ impl ConcatAgentServer {
         &self,
         Parameters(params): Parameters<ApplyEditPlanParams>,
     ) -> Result<CallToolResult, McpError> {
-        let commands = params
-            .operations
-            .into_iter()
-            .enumerate()
-            .map(|(index, value)| {
-                parse_raw_command(value).map_err(|error| format!("operation {index}: {error}"))
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(to_mcp_err)?;
         self.engine
             .apply_edit_plan(
                 params.expected_revision,
-                commands,
+                params.operations,
                 params.dry_run.unwrap_or(false),
                 params.validate.unwrap_or(true),
             )

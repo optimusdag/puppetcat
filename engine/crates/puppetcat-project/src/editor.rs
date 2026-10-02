@@ -34,6 +34,24 @@ pub struct Editor {
     revision: u64,
 }
 
+/// Why staging a plan failed.
+#[derive(Debug)]
+pub enum StageError {
+    /// A command could not be built from the plan's own context.
+    Build(String),
+    /// A command was rejected by the editor.
+    Command(CommandError),
+}
+
+impl std::fmt::Display for StageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Build(message) => f.write_str(message),
+            Self::Command(error) => write!(f, "{error}"),
+        }
+    }
+}
+
 /// A plan applied to a copy of the session: nothing is live until
 /// [`Editor::commit`] takes it.
 pub struct Staged {
@@ -108,12 +126,30 @@ impl Editor {
     /// Applies `commands` in order to a copy, leaving the session untouched.
     /// The first failing command aborts the whole plan.
     pub fn stage(&self, commands: Vec<Command>) -> Result<Staged, CommandError> {
+        let mut commands = commands.into_iter();
+        let count = commands.len();
+        self.stage_with(count, |_, _| Ok(commands.next().expect("counted")))
+            .map_err(|error| match error {
+                StageError::Command(error) => error,
+                StageError::Build(_) => unreachable!("building cannot fail here"),
+            })
+    }
+
+    /// Like [`Editor::stage`], but each command is built just in time from
+    /// the ids the earlier ones minted - what lets a plan refer to a clip it
+    /// creates itself. `build` gets the index and the ids minted so far.
+    pub fn stage_with(
+        &self,
+        count: usize,
+        mut build: impl FnMut(usize, &[Option<String>]) -> Result<Command, String>,
+    ) -> Result<Staged, StageError> {
         let mut project = self.project.clone();
         let mut mint = self.mint.clone();
-        let mut created_ids = Vec::with_capacity(commands.len());
+        let mut created_ids = Vec::with_capacity(count);
         let mut applied = false;
-        for command in commands {
-            let outcome = apply(&mut project, &mut mint, command)?;
+        for index in 0..count {
+            let command = build(index, &created_ids).map_err(StageError::Build)?;
+            let outcome = apply(&mut project, &mut mint, command).map_err(StageError::Command)?;
             applied |= outcome.applied;
             created_ids.push(outcome.created_id);
         }

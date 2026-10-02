@@ -35,6 +35,8 @@ pub struct EditPlanResult {
     pub new_revision: u64,
     /// One entry per operation, in order: the id it minted, if any.
     pub created_ids: Vec<Option<String>>,
+    /// Client reference name to the id it resolved to.
+    pub refs: std::collections::BTreeMap<String, String>,
     /// Net clips added to the active timeline.
     pub clips_delta: i64,
     /// Net markers added to the active timeline.
@@ -47,6 +49,33 @@ pub struct EditPlanResult {
     pub duration_after: f64,
     /// Validation of the staged result, when requested.
     pub validation: Option<ValidationReport>,
+}
+
+/// Replaces every string equal to `$name` with the id that reference
+/// resolved to. An unknown name is an error rather than a literal, so a typo
+/// cannot silently address the wrong object.
+fn substitute_refs(
+    value: &mut serde_json::Value,
+    refs: &std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    match value {
+        serde_json::Value::String(text) => {
+            if let Some(name) = text.strip_prefix('$') {
+                *text = refs
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("unknown reference ${name}; refs must be defined by an earlier operation that mints an id"))?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Array(items) => items
+            .iter_mut()
+            .try_for_each(|item| substitute_refs(item, refs)),
+        serde_json::Value::Object(map) => map
+            .values_mut()
+            .try_for_each(|item| substitute_refs(item, refs)),
+        _ => Ok(()),
+    }
 }
 
 fn shape(project: &puppetcat_project::Project) -> (usize, usize, usize, f64) {
@@ -214,7 +243,7 @@ impl AgentEngine {
     pub fn apply_edit_plan(
         &self,
         expected_revision: u64,
-        commands: Vec<Command>,
+        operations: Vec<serde_json::Value>,
         dry_run: bool,
         validate: bool,
     ) -> Result<EditPlanResult, String> {
@@ -227,7 +256,37 @@ impl AgentEngine {
                  re-read state and rebuild the plan"
             ));
         }
-        let staged = session.stage(commands)?;
+        let mut refs: std::collections::BTreeMap<String, String> = Default::default();
+        let mut names: Vec<Option<String>> = Vec::with_capacity(operations.len());
+        let count = operations.len();
+        let mut pending = operations.into_iter();
+        let staged = session.stage_with(count, |index, created| {
+            // Record what the previous operation minted under its ref name.
+            if let (Some(Some(name)), Some(Some(id))) = (names.last(), created.last()) {
+                refs.insert(name.clone(), id.clone());
+            }
+            let mut value = pending.next().expect("counted");
+            let name = match value
+                .as_object_mut()
+                .and_then(|object| object.remove("ref"))
+            {
+                Some(serde_json::Value::String(name)) if !name.is_empty() => Some(name),
+                Some(_) => {
+                    return Err(format!("operation {index}: ref must be a non-empty string"));
+                }
+                None => None,
+            };
+            substitute_refs(&mut value, &refs)
+                .map_err(|error| format!("operation {index}: {error}"))?;
+            names.push(name);
+            crate::dto::parse_raw_command(value)
+                .map_err(|error| format!("operation {index}: {error}"))
+        })?;
+        let ref_ids: std::collections::BTreeMap<String, String> = names
+            .iter()
+            .zip(&staged.created_ids)
+            .filter_map(|(name, id)| Some((name.clone()?, id.clone()?)))
+            .collect();
         let before = session.project();
         let (clips_before, markers_before, media_before, duration_before) = shape(before);
         let (clips_after, markers_after, media_after, duration_after) = shape(&staged.project);
@@ -265,6 +324,7 @@ impl AgentEngine {
                 session.revision()
             },
             created_ids,
+            refs: ref_ids,
             clips_delta: clips_after as i64 - clips_before as i64,
             markers_delta: markers_after as i64 - markers_before as i64,
             media_delta: media_after as i64 - media_before as i64,
@@ -929,6 +989,80 @@ mod tests {
         agent
             .open_project(&info.path)
             .expect("reopening its own project is not a conflict");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_edit_plan_is_atomic_resolves_refs_and_checks_the_revision() {
+        use serde_json::json;
+        let root = scratch("edit-plan");
+        let agent = engine(&root);
+        agent
+            .create_project(
+                &root.join("projects").to_string_lossy(),
+                "Plan",
+                1920,
+                1080,
+                30,
+                1,
+            )
+            .expect("creates and opens");
+        let revision = agent.get_state().expect("state").revision;
+        let tracks = agent
+            .get_state()
+            .expect("state")
+            .project
+            .active()
+            .tracks
+            .len();
+        let plan = || {
+            vec![
+                json!({"op": "addTrack", "ref": "lane"}),
+                json!({"op": "renameTrack", "trackId": "$lane", "name": "Overlay"}),
+            ]
+        };
+
+        // A dry run reports but changes nothing.
+        let dry = agent
+            .apply_edit_plan(revision, plan(), true, true)
+            .expect("dry run");
+        assert!(!dry.committed);
+        assert_eq!(dry.new_revision, revision);
+        assert_eq!(agent.get_state().unwrap().revision, revision);
+
+        // A bad operation commits nothing, even after a good one.
+        let bad = vec![
+            json!({"op": "addTrack"}),
+            json!({"op": "renameTrack", "trackId": "$nope", "name": "x"}),
+        ];
+        assert!(agent.apply_edit_plan(revision, bad, false, true).is_err());
+        assert_eq!(
+            agent.get_state().unwrap().project.active().tracks.len(),
+            tracks
+        );
+
+        // The real run resolves the ref and is one undo step.
+        let done = agent
+            .apply_edit_plan(revision, plan(), false, true)
+            .expect("commits");
+        assert!(done.committed);
+        assert_ne!(done.new_revision, revision);
+        let lane = done.refs.get("lane").expect("ref resolved").clone();
+        let state = agent.get_state().unwrap();
+        let track = state.project.active().track(&lane).expect("track exists");
+        assert_eq!(track.name, "Overlay");
+
+        // The old revision is now stale.
+        let stale = agent
+            .apply_edit_plan(revision, plan(), false, true)
+            .expect_err("stale");
+        assert!(stale.contains("stale"), "got: {stale}");
+
+        agent.undo().expect("undo");
+        assert_eq!(
+            agent.get_state().unwrap().project.active().tracks.len(),
+            tracks
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

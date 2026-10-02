@@ -202,6 +202,18 @@ impl Session {
             .map_err(|error| error.to_string())
     }
 
+    /// Stages a plan whose commands are built just in time from the ids
+    /// earlier commands minted.
+    pub fn stage_with(
+        &self,
+        count: usize,
+        build: impl FnMut(usize, &[Option<String>]) -> Result<Command, String>,
+    ) -> Result<puppetcat_project::Staged, String> {
+        self.editor
+            .stage_with(count, build)
+            .map_err(|error| error.to_string())
+    }
+
     /// Makes a staged plan live as one undo step.
     pub fn commit(&mut self, staged: puppetcat_project::Staged) -> EditorView {
         self.editor.commit(staged);

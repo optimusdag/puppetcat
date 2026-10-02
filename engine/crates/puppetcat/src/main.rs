@@ -139,6 +139,7 @@ fn main() -> Result<(), slint::PlatformError> {
         editor.set_adjust_params(ModelRc::from(models.adjust_params.clone()));
         editor.set_menu_items(ModelRc::from(models.menu.clone()));
         editor.set_marker_menu_items(ModelRc::from(models.marker_menu.clone()));
+        editor.set_timeline_menu_items(ModelRc::from(models.timeline_menu.clone()));
         editor.set_av_items(ModelRc::from(models.av.clone()));
         app.set_app_menu_items(ModelRc::from(models.bar.clone()));
         app.set_transcribers(ModelRc::from(models.transcribers.clone()));
@@ -534,12 +535,14 @@ fn main() -> Result<(), slint::PlatformError> {
         state.apply(puppetcat_project::Command::AddMarker {
             time: f64::from(at),
             name: None,
+            clip_id: None,
         });
     }));
     editor.on_marker_add_requested(on_lanes!(|state, seconds: f32| {
         state.apply(puppetcat_project::Command::AddMarker {
             time: f64::from(seconds),
             name: None,
+            clip_id: None,
         });
     }));
     editor.on_marker_pressed(on_lanes!(|state, id: SharedString| {
@@ -568,11 +571,31 @@ fn main() -> Result<(), slint::PlatformError> {
         };
         match action.as_str() {
             "rename" => state.renaming_marker_id = Some(id),
+            "detach" => {
+                state.apply(puppetcat_project::Command::AttachMarker {
+                    marker_id: id,
+                    clip_id: None,
+                });
+            }
             "delete" => {
                 state.apply(puppetcat_project::Command::RemoveMarker { marker_id: id });
                 state.marker_menu_target = None;
             }
             _ => {}
+        }
+    }));
+
+    editor.on_timeline_context(on_window!(|state| {
+        state.timeline_menu_token += 1;
+    }));
+    editor.on_timeline_menu_selected(on_window!(|state, action: SharedString| {
+        if action.as_str() == "timeline-marker" {
+            let at = f64::from(state.playhead);
+            state.apply(puppetcat_project::Command::AddMarker {
+                time: at,
+                name: None,
+                clip_id: None,
+            });
         }
     }));
 
@@ -824,6 +847,14 @@ fn main() -> Result<(), slint::PlatformError> {
                         volume: Some(volume),
                         ..Default::default()
                     },
+                });
+            }
+            "clip-marker" => {
+                let at = f64::from(state.playhead);
+                state.apply(puppetcat_project::Command::AddMarker {
+                    time: at,
+                    name: None,
+                    clip_id: Some(id),
                 });
             }
             "lock" => state.toggle_lock(&clip.track_id),

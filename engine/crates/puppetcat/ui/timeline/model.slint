@@ -130,6 +130,9 @@ export struct MarkerData {
     label: string,
     /// seconds from the start of the timeline
     time: float,
+    /// The lane row of the clip this marker is attached to, drawn at the
+    /// top of that clip; -1 for a free marker, which lives on the ruler.
+    row: int,
 }
 
 /// What a drag from the library will leave on the timeline if it is released

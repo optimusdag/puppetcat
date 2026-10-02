@@ -305,6 +305,11 @@ export component Seat inherits Rectangle {
             marker-add-requested(seconds) => { Editor.marker-add-requested(seconds); }
             marker-context(id) => { Editor.marker-context(id); }
             marker-menu-selected(id) => { Editor.marker-menu-selected(id); }
+            timeline-menu-items: Editor.timeline-menu-items;
+            timeline-menu-height: Editor.timeline-menu-height;
+            timeline-menu-token: Editor.timeline-menu-token;
+            timeline-context => { Editor.timeline-context(); }
+            timeline-menu-selected(id) => { Editor.timeline-menu-selected(id); }
             band-selected(a, b, c, d, additive) => { Editor.band-selected(a, b, c, d, additive); }
             scrolled(seconds) => { Editor.scrolled(seconds); }
             drop: Editor.drop;

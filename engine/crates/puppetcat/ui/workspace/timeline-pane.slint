@@ -99,6 +99,11 @@ export component TimelinePane inherits Rectangle {
     in property <string> renaming-marker-id: "";
     callback marker-context(id: string);
     callback marker-menu-selected(id: string);
+    in property <[MenuItemData]> timeline-menu-items;
+    in property <length> timeline-menu-height;
+    in property <int> timeline-menu-token;
+    callback timeline-context();
+    callback timeline-menu-selected(id: string);
 
     callback band-selected(from-seconds: float, to-seconds: float,
         from-y: length, to-y: length, additive: bool);
@@ -324,6 +329,11 @@ export component TimelinePane inherits Rectangle {
                 marker-add-requested(seconds) => { root.marker-add-requested(seconds); }
                 marker-context(id) => { root.marker-context(id); }
                 marker-menu-selected(id) => { root.marker-menu-selected(id); }
+                timeline-menu-items: root.timeline-menu-items;
+                timeline-menu-height: root.timeline-menu-height;
+                timeline-menu-token: root.timeline-menu-token;
+                timeline-context => { root.timeline-context(); }
+                timeline-menu-selected(id) => { root.timeline-menu-selected(id); }
 
                 band-selected(a, b, c, d, additive) => {
                     root.band-selected(a, b, c, d, additive);

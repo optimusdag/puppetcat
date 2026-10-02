@@ -414,6 +414,7 @@ pub struct Models {
     pub adjust_params: Rc<VecModel<AppliedParamData>>,
     pub menu: Rc<VecModel<MenuItemData>>,
     pub marker_menu: Rc<VecModel<MenuItemData>>,
+    pub timeline_menu: Rc<VecModel<MenuItemData>>,
     pub av: Rc<VecModel<MenuItemData>>,
     pub bar: Rc<VecModel<MenuItemData>>,
     pub transcribers: Rc<VecModel<ModelData>>,
@@ -448,6 +449,7 @@ impl Models {
             adjust_params: Rc::new(VecModel::default()),
             menu: Rc::new(VecModel::default()),
             marker_menu: Rc::new(VecModel::default()),
+            timeline_menu: Rc::new(VecModel::default()),
             av: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
             transcribers: Rc::new(VecModel::default()),
@@ -573,6 +575,9 @@ pub struct Studio {
     /// menus share nothing but the component that draws them.
     pub marker_menu_target: Option<String>,
     pub marker_menu_token: i32,
+    /// Bumped by a right-click on the empty lanes or the ruler; the menu has
+    /// no target, since it acts on the timeline at the playhead.
+    pub timeline_menu_token: i32,
     /// The marker mid-rename, if any - driven by the marker menu's Rename
     /// row rather than a gesture of the marker's own; see `lanes.slint`'s
     /// `Marker` component.
@@ -956,6 +961,7 @@ impl Studio {
             menu_token: 0,
             marker_menu_target: None,
             marker_menu_token: 0,
+            timeline_menu_token: 0,
             renaming_marker_id: None,
             toast: ToastState::default(),
             on_start: true,
@@ -2325,9 +2331,18 @@ impl Studio {
         let Gesture::MoveMarker { marker, start } = &self.gesture else {
             return;
         };
-        let (id, at) = (marker.clone(), (start + seconds).max(0.0));
+        let (id, mut at) = (marker.clone(), f64::from((start + seconds).max(0.0)));
+        // An attached marker slides along its clip and stops at the ends.
+        let span = self.echo.as_ref().and_then(|echo| {
+            let timeline = echo.active();
+            let clip = timeline.clip(timeline.marker(&id)?.clip_id.as_deref()?)?;
+            Some((clip.start, clip.start + clip.duration))
+        });
+        if let Some((from, to)) = span {
+            at = at.clamp(from, to);
+        }
         if let Some(marker) = self.echo_marker_mut(&id) {
-            marker.time = f64::from(at);
+            marker.time = at;
         }
     }
 
@@ -4055,6 +4070,11 @@ impl Studio {
                     // on a multi-byte character does not panic.
                     label: marker.name.chars().take(4).collect::<String>().into(),
                     time: marker.time as f32,
+                    row: marker
+                        .clip_id
+                        .as_deref()
+                        .and_then(|id| timeline.clip(id))
+                        .map_or(-1, |clip| self.row_of(&clip.track_id)),
                 })
                 .collect(),
         );
@@ -4401,6 +4421,10 @@ impl Studio {
         editor.set_marker_menu_height(Self::menu_height(&marker_rows));
         sync(&models.marker_menu, marker_rows);
         editor.set_marker_menu_token(self.marker_menu_token);
+        let timeline_rows = self.timeline_menu();
+        editor.set_timeline_menu_height(Self::menu_height(&timeline_rows));
+        sync(&models.timeline_menu, timeline_rows);
+        editor.set_timeline_menu_token(self.timeline_menu_token);
 
         app.set_export(self.export_data());
         app.set_settings(SettingsData {
@@ -4591,6 +4615,13 @@ impl Studio {
                 "S",
                 straddled && !locked,
             ),
+            action(
+                "clip-marker",
+                "Add clip marker at playhead".into(),
+                Glyph::Plus,
+                "",
+                clip.start <= playhead && playhead <= clip.start + clip.duration,
+            ),
             rule(),
         ];
         let audible = clip.kind != model::ClipKind::Image;
@@ -4627,7 +4658,7 @@ impl Studio {
         else {
             return Vec::new();
         };
-        vec![
+        let mut rows = vec![
             MenuItemData {
                 label: marker.name.as_str().into(),
                 kind: MenuRow::Label,
@@ -4644,6 +4675,22 @@ impl Studio {
                 checkable: false,
                 checked: false,
             },
+        ];
+        // Only an attached marker has anything to let go of.
+        if marker.clip_id.is_some() {
+            rows.push(MenuItemData {
+                id: "detach".into(),
+                label: "Detach from clip".into(),
+                kind: MenuRow::Action,
+                glyph: Glyph::None,
+                shortcut: SharedString::new(),
+                enabled: true,
+                danger: false,
+                checkable: false,
+                checked: false,
+            });
+        }
+        rows.extend([
             MenuItemData {
                 kind: MenuRow::Separator,
                 ..Default::default()
@@ -4659,7 +4706,23 @@ impl Studio {
                 checkable: false,
                 checked: false,
             },
-        ]
+        ]);
+        rows
+    }
+
+    /// The right-click menu for the empty lanes and the ruler.
+    fn timeline_menu(&self) -> Vec<MenuItemData> {
+        vec![MenuItemData {
+            id: "timeline-marker".into(),
+            label: "Add timeline marker at playhead".into(),
+            kind: MenuRow::Action,
+            glyph: Glyph::Plus,
+            shortcut: SharedString::new(),
+            enabled: true,
+            danger: false,
+            checkable: false,
+            checked: false,
+        }]
     }
 
     pub fn menu_height(rows: &[MenuItemData]) -> f32 {

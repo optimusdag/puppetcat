@@ -112,9 +112,19 @@ fn read_markers(raw: Option<&Value>) -> Vec<Marker> {
         .iter()
         .filter_map(|entry| {
             let id = entry.get("id")?.as_str()?.to_owned();
+            let clip_id = entry
+                .get("clipId")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             Some(Marker {
                 name: text(entry.get("name"), "Marker"),
                 time: number(entry.get("time"), 0.0).max(0.0),
+                offset: if clip_id.is_some() {
+                    number(entry.get("offset"), 0.0).max(0.0)
+                } else {
+                    0.0
+                },
+                clip_id,
                 id,
             })
         })

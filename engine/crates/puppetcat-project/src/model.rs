@@ -409,8 +409,22 @@ pub struct Marker {
     /// itself and the rest on hover; the full string is what an agent
     /// matches against, so it is never truncated in storage.
     pub name: String,
-    /// Seconds from the start of the timeline.
+    /// Seconds from the start of the timeline. For a marker attached to a
+    /// clip this is derived (clip start + `offset`) and kept current by the
+    /// command layer, so readers never need to resolve the attachment.
     pub time: f64,
+    /// The clip this marker rides on, if any. Moving the clip moves the
+    /// marker; removing the clip detaches it where it stood.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_id: Option<String>,
+    /// Seconds from the attached clip's start. Meaningless when `clip_id`
+    /// is None.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub offset: f64,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 /// One timeline: a name and its lanes, clips and markers. Every operation

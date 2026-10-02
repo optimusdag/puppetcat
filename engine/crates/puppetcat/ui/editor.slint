@@ -233,6 +233,11 @@ export global Editor {
     in-out property <string> renaming-marker-id;
     callback marker-context(id: string);
     callback marker-menu-selected(id: string);
+    in-out property <[MenuItemData]> timeline-menu-items;
+    in-out property <length> timeline-menu-height;
+    in-out property <int> timeline-menu-token;
+    callback timeline-context();
+    callback timeline-menu-selected(id: string);
 
     callback band-selected(from-seconds: float, to-seconds: float,
         from-y: length, to-y: length, additive: bool);

@@ -609,6 +609,23 @@ export component Lanes inherits Rectangle {
             root.marker-own-token = root.marker-menu-token;
         }
     }
+    // A third menu, for right-clicks on the empty lanes and the ruler: what
+    // can be done to the timeline rather than to a clip or a marker.
+    callback timeline-context();
+    callback timeline-menu-selected(id: string);
+
+    in property <[MenuItemData]> timeline-menu-items;
+    in property <length> timeline-menu-height;
+    in property <int> timeline-menu-token;
+
+    property <bool> timeline-asked;
+    property <int> timeline-own-token;
+    changed timeline-menu-token => {
+        if (root.timeline-asked) {
+            root.timeline-asked = false;
+            root.timeline-own-token = root.timeline-menu-token;
+        }
+    }
     /// A band closed over this box. Committed on release rather than live:
     /// selecting as the band sweeps looks busy and makes a mistaken sweep hard
     /// to back out of.
@@ -736,7 +753,9 @@ export component Lanes inherits Rectangle {
             height: root.lanes-h;
             background: Theme.accent;
             opacity: 0.35;
-            visible: self.x >= 0px && self.x < parent.width;
+            // Only a free marker threads the lanes; an attached one belongs
+            // to its clip and is drawn there.
+            visible: marker.row < 0 && self.x >= 0px && self.x < parent.width;
         }
 
         // Declared before the clips, so each clip takes its own press and what
@@ -755,6 +774,17 @@ export component Lanes inherits Rectangle {
             property <length> to-y;
 
             pointer-event(event) => {
+                // On the release, like a clip's menu, and without starting a
+                // band.
+                if (event.button == PointerEventButton.right) {
+                    if (event.kind == PointerEventKind.up) {
+                        timeline-menu.request-x = wheel.mouse-x;
+                        timeline-menu.request-y = wheel.mouse-y;
+                        root.timeline-asked = true;
+                        root.timeline-context();
+                    }
+                    return;
+                }
                 if (event.kind == PointerEventKind.down) {
                     self.additive = event.modifiers.shift;
                     self.from-x = self.mouse-x;
@@ -815,6 +845,31 @@ export component Lanes inherits Rectangle {
                 menu.request-y = wheel.mouse-y;
                 root.asked = true;
                 root.clip-context(entry.id);
+            }
+        }
+
+        // ── markers attached to a clip ───────────────────────────────────
+        //
+        // Drawn on the clip's own top edge rather than the ruler, after the
+        // clips so the pin takes its press before the clip beneath it.
+        for marker in root.markers: Marker {
+            x: root.at(marker.time) - self.width / 2;
+            y: root.row-y(Math.max(marker.row, 0)) + 4px;
+            visible: marker.row >= 0 && self.x + self.width > 0
+                && self.x < root.width && self.y + self.height > root.ruler-height;
+            px-per-second: root.px-per-second;
+            item: marker;
+            renaming: marker.id == root.renaming-marker-id;
+
+            pressed => { root.marker-pressed(marker.id); }
+            dragged(seconds) => { root.marker-dragged(marker.id, seconds); }
+            released => { root.marker-released(); }
+            renamed(name) => { root.marker-renamed(marker.id, name); }
+            context-requested => {
+                marker-menu.request-x = wheel.mouse-x;
+                marker-menu.request-y = wheel.mouse-y;
+                root.marker-asked = true;
+                root.marker-context(marker.id);
             }
         }
 
@@ -982,6 +1037,15 @@ export component Lanes inherits Rectangle {
             scrub := TouchArea {
                 mouse-cursor: pointer;
                 pointer-event(event) => {
+                    if (event.button == PointerEventButton.right) {
+                        if (event.kind == PointerEventKind.up) {
+                            timeline-menu.request-x = wheel.mouse-x;
+                            timeline-menu.request-y = wheel.mouse-y;
+                            root.timeline-asked = true;
+                            root.timeline-context();
+                        }
+                        return;
+                    }
                     if (event.kind == PointerEventKind.down) {
                         root.scrubbed(Math.max(0, root.seconds-at(self.mouse-x)));
                     }
@@ -1001,6 +1065,7 @@ export component Lanes inherits Rectangle {
             for marker in root.markers: Marker {
                 x: root.at(marker.time) - self.width / 2;
                 y: 2px;
+                visible: marker.row < 0;
                 px-per-second: root.px-per-second;
                 item: marker;
                 renaming: marker.id == root.renaming-marker-id;
@@ -1041,6 +1106,17 @@ export component Lanes inherits Rectangle {
             menu-height: root.marker-menu-height;
             token: root.marker-own-token;
             selected(id) => { root.marker-menu-selected(id); }
+        }
+
+        timeline-menu := ContextMenu {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            items: root.timeline-menu-items;
+            menu-height: root.timeline-menu-height;
+            token: root.timeline-own-token;
+            selected(id) => { root.timeline-menu-selected(id); }
         }
 
         // ── the playhead ─────────────────────────────────────────────────

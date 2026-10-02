@@ -233,6 +233,19 @@ pub struct AddMarkerParams {
     pub time: f64,
     /// Label. Omit for "Marker N" after the highest already in use.
     pub name: Option<String>,
+    /// Attach the marker to this clip so it moves with it. Omit for a
+    /// free-floating marker.
+    pub clip_id: Option<String>,
+}
+
+/// Parameters for `attach_marker`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachMarkerParams {
+    /// The marker to attach or detach.
+    pub marker_id: String,
+    /// The clip to attach to. Omit to detach the marker.
+    pub clip_id: Option<String>,
 }
 
 /// Parameters for `rename_marker`.
@@ -592,6 +605,20 @@ impl ConcatAgentServer {
         ok_state(self.engine.apply(Command::AddMarker {
             time: params.time,
             name: params.name,
+            clip_id: params.clip_id,
+        }))
+    }
+
+    #[tool(
+        description = "Attach a marker to a clip so it moves with that clip, or detach it by omitting clipId. The marker keeps its current time when attached."
+    )]
+    fn attach_marker(
+        &self,
+        Parameters(params): Parameters<AttachMarkerParams>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_state(self.engine.apply(Command::AttachMarker {
+            marker_id: params.marker_id,
+            clip_id: params.clip_id,
         }))
     }
 

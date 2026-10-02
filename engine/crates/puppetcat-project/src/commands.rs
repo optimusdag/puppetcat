@@ -422,6 +422,18 @@ pub enum Command {
         /// Label; "Marker N" after the highest already in use when absent
         /// or blank.
         name: Option<String>,
+        /// Attaches the new marker to this clip, so it moves with it. An
+        /// unknown id leaves the marker free-floating.
+        #[serde(default)]
+        clip_id: Option<String>,
+    },
+    /// Attaches a marker to a clip (it keeps its current time, so it will
+    /// follow the clip from here on), or detaches it with `None`.
+    AttachMarker {
+        /// The marker to attach or detach.
+        marker_id: String,
+        /// The clip to ride on; None to free the marker.
+        clip_id: Option<String>,
     },
     /// Deletes a marker from the active timeline. An unknown id is a no-op.
     RemoveMarker {
@@ -741,6 +753,45 @@ fn assign<T: PartialEq>(slot: &mut T, value: T) -> bool {
 /// no-op rename, an out-of-range split) returns Ok with no created id and
 /// [`Outcome::applied`] false.
 pub fn apply(
+    project: &mut Project,
+    mint: &mut IdMint,
+    command: Command,
+) -> Result<Outcome, CommandError> {
+    let outcome = apply_command(project, mint, command)?;
+    for timeline in &mut project.timelines {
+        sync_markers(timeline);
+    }
+    Ok(outcome)
+}
+
+/// Keeps attached markers on their clips: the time is the clip's start plus
+/// the offset, so any command that moved or resized a clip carries its
+/// markers without knowing they exist. A marker whose clip is gone is let
+/// go where it last stood.
+fn sync_markers(timeline: &mut Timeline) {
+    let clips: std::collections::HashMap<&str, (f64, f64)> = timeline
+        .clips
+        .iter()
+        .map(|clip| (clip.id.as_str(), (clip.start, clip.duration)))
+        .collect();
+    for marker in &mut timeline.markers {
+        let Some(id) = marker.clip_id.as_deref() else {
+            continue;
+        };
+        match clips.get(id) {
+            Some(&(start, duration)) => {
+                marker.offset = marker.offset.clamp(0.0, duration);
+                marker.time = start + marker.offset;
+            }
+            None => {
+                marker.clip_id = None;
+                marker.offset = 0.0;
+            }
+        }
+    }
+}
+
+fn apply_command(
     project: &mut Project,
     mint: &mut IdMint,
     command: Command,
@@ -1087,6 +1138,7 @@ pub fn apply(
             let Some(clip) = timeline.clip_mut(&clip_id) else {
                 return Ok(Outcome::default());
             };
+            let mut head_shift = 0.0;
             let applied = match edge {
                 TrimEdge::End => {
                     let duration = (clip.duration + delta).max(MIN_CLIP_DURATION);
@@ -1100,12 +1152,26 @@ pub fn apply(
                     let moved = start - clip.start;
                     let duration = clip.duration - moved;
                     let source_start = (clip.source_start + moved * clip.speed).max(0.0);
+                    head_shift = moved;
                     // Bitwise so no assignment is short-circuited away.
                     assign(&mut clip.start, start)
                         | assign(&mut clip.duration, duration)
                         | assign(&mut clip.source_start, source_start)
                 }
             };
+            // Markers keep their place on the footage when the head moves;
+            // one the head passes is let go where it stood.
+            if head_shift != 0.0 {
+                for marker in &mut timeline.markers {
+                    if marker.clip_id.as_deref() == Some(clip_id.as_str()) {
+                        marker.offset -= head_shift;
+                        if marker.offset < 0.0 {
+                            marker.clip_id = None;
+                            marker.offset = 0.0;
+                        }
+                    }
+                }
+            }
             Ok(Outcome {
                 created_id: None,
                 applied,
@@ -1149,6 +1215,16 @@ pub fn apply(
                 tail.transition_in = None;
                 created = Some(tail.id.clone());
                 timeline.clips[index].duration = offset;
+                // Markers past the cut ride the tail from here on.
+                let head_id = timeline.clips[index].id.clone();
+                for marker in &mut timeline.markers {
+                    if marker.clip_id.as_deref() == Some(head_id.as_str())
+                        && marker.offset >= offset
+                    {
+                        marker.clip_id = Some(tail.id.clone());
+                        marker.offset -= offset;
+                    }
+                }
                 timeline.clips.insert(index + 1, tail);
             }
             // A split always mints the tail, so "minted anything" and
@@ -1178,6 +1254,16 @@ pub fn apply(
             // timeline against it.
             let doomed: HashSet<String> =
                 ordered.iter().skip(1).map(|clip| clip.id.clone()).collect();
+            // Markers on an absorbed piece move to the survivor, keeping
+            // their place on the timeline.
+            for piece in ordered.iter().skip(1) {
+                for marker in &mut timeline.markers {
+                    if marker.clip_id.as_deref() == Some(piece.id.as_str()) {
+                        marker.clip_id = Some(first.id.clone());
+                        marker.offset += piece.start - first.start;
+                    }
+                }
+            }
             timeline.clips.retain(|clip| !doomed.contains(&clip.id));
             let survivor = timeline
                 .clip_mut(&first.id)
@@ -1557,7 +1643,11 @@ pub fn apply(
             })
         }
 
-        Command::AddMarker { time, name } => {
+        Command::AddMarker {
+            time,
+            name,
+            clip_id,
+        } => {
             let timeline = project.active_mut();
             let id = mint.next("mk");
             let name = name
@@ -1569,14 +1659,46 @@ pub fn apply(
                         timeline.markers.iter().map(|marker| marker.name.clone()),
                     )
                 });
+            let time = time.max(0.0);
+            let (clip_id, offset) = match clip_id.and_then(|id| timeline.clip(&id)) {
+                Some(clip) => (
+                    Some(clip.id.clone()),
+                    (time - clip.start).clamp(0.0, clip.duration),
+                ),
+                None => (None, 0.0),
+            };
             timeline.markers.push(Marker {
                 id: id.clone(),
                 name,
-                time: time.max(0.0),
+                time,
+                clip_id,
+                offset,
             });
             Ok(Outcome {
                 created_id: Some(id),
                 applied: true,
+            })
+        }
+
+        Command::AttachMarker { marker_id, clip_id } => {
+            let timeline = project.active_mut();
+            let target = clip_id
+                .and_then(|id| timeline.clip(&id))
+                .map(|clip| (clip.id.clone(), clip.start, clip.duration));
+            let Some(marker) = timeline.marker_mut(&marker_id) else {
+                return Ok(Outcome::default());
+            };
+            let (clip_id, offset) = match target {
+                Some((id, start, duration)) => {
+                    (Some(id), (marker.time - start).clamp(0.0, duration))
+                }
+                None => (None, 0.0),
+            };
+            // Bitwise so neither assignment is short-circuited away.
+            let applied = assign(&mut marker.clip_id, clip_id) | assign(&mut marker.offset, offset);
+            Ok(Outcome {
+                created_id: None,
+                applied,
             })
         }
 
@@ -1609,10 +1731,25 @@ pub fn apply(
 
         Command::MoveMarker { marker_id, time } => {
             let timeline = project.active_mut();
+            let time = time.max(0.0);
+            // An attached marker slides along its clip: the new time becomes
+            // an offset, clamped to the clip, and the sync pass derives the
+            // time from it.
+            let anchor = timeline
+                .marker(&marker_id)
+                .and_then(|marker| marker.clip_id.as_deref())
+                .and_then(|id| timeline.clip(id))
+                .map(|clip| (clip.start, clip.duration));
             let Some(marker) = timeline.marker_mut(&marker_id) else {
                 return Ok(Outcome::default());
             };
-            let applied = assign(&mut marker.time, time.max(0.0));
+            let applied = match anchor {
+                Some((start, duration)) => {
+                    let offset = (time - start).clamp(0.0, duration);
+                    assign(&mut marker.offset, offset) | assign(&mut marker.time, start + offset)
+                }
+                None => assign(&mut marker.time, time),
+            };
             Ok(Outcome {
                 created_id: None,
                 applied,

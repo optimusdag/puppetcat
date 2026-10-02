@@ -397,6 +397,7 @@ mod tests {
             .apply(Command::AddMarker {
                 time: 2.5,
                 name: Some("Beat".to_owned()),
+                clip_id: None,
             })
             .expect("adds");
 
@@ -412,6 +413,7 @@ mod tests {
             .apply(Command::AddMarker {
                 time: 4.0,
                 name: None,
+                clip_id: None,
             })
             .expect("adds")
             .created_id
@@ -465,6 +467,136 @@ mod tests {
             .apply(Command::RemoveMarker { marker_id: id })
             .expect("no-op");
         assert!(!outcome.applied);
+    }
+
+    fn attached_marker(editor: &mut Editor, clip_id: &str, at: f64) -> String {
+        editor
+            .apply(Command::AddMarker {
+                time: at,
+                name: None,
+                clip_id: Some(clip_id.to_owned()),
+            })
+            .expect("adds")
+            .created_id
+            .expect("id")
+    }
+
+    #[test]
+    fn an_attached_marker_follows_its_clip_and_survives_a_round_trip() {
+        let (mut editor, _, clip_id) = fixture();
+        let clip = editor.project().active().clip(&clip_id).unwrap().clone();
+        let at = clip.start + clip.duration / 2.0;
+        let id = attached_marker(&mut editor, &clip_id, at);
+        let marker = editor.project().active().marker(&id).unwrap();
+        assert_eq!(marker.clip_id.as_deref(), Some(clip_id.as_str()));
+        assert_eq!(marker.time, at);
+
+        editor
+            .apply(Command::MoveClips {
+                moves: vec![ClipMove {
+                    clip_id: clip_id.clone(),
+                    start: clip.start + 10.0,
+                    track_id: clip.track_id.clone(),
+                }],
+            })
+            .expect("moves");
+        assert_eq!(
+            editor.project().active().marker(&id).unwrap().time,
+            at + 10.0
+        );
+
+        let document = editor.to_document(&settings());
+        let restored = Editor::from_document(&document).expect("loads");
+        assert_eq!(restored.project(), editor.project());
+
+        // Dragging it slides along the clip and stops at the clip's end.
+        editor
+            .apply(Command::MoveMarker {
+                marker_id: id.clone(),
+                time: 1.0e6,
+            })
+            .expect("moves");
+        let marker = editor.project().active().marker(&id).unwrap();
+        assert_eq!(marker.offset, clip.duration);
+
+        // Detaching keeps it where it stands; the clip then leaves it behind.
+        let stood = marker.time;
+        editor
+            .apply(Command::AttachMarker {
+                marker_id: id.clone(),
+                clip_id: None,
+            })
+            .expect("detaches");
+        editor
+            .apply(Command::MoveClips {
+                moves: vec![ClipMove {
+                    clip_id: clip_id.clone(),
+                    start: 0.0,
+                    track_id: clip.track_id,
+                }],
+            })
+            .expect("moves");
+        let marker = editor.project().active().marker(&id).unwrap();
+        assert!(marker.clip_id.is_none());
+        assert_eq!(marker.time, stood);
+    }
+
+    #[test]
+    fn removing_a_clip_leaves_its_markers_where_they_stood() {
+        let (mut editor, _, clip_id) = fixture();
+        let start = editor.project().active().clip(&clip_id).unwrap().start;
+        let id = attached_marker(&mut editor, &clip_id, start);
+        editor
+            .apply(Command::RemoveClips {
+                clip_ids: vec![clip_id],
+            })
+            .expect("removes");
+        let marker = editor.project().active().marker(&id).unwrap();
+        assert!(marker.clip_id.is_none());
+        assert_eq!(marker.time, start);
+    }
+
+    #[test]
+    fn splitting_and_head_trimming_keep_markers_on_their_footage() {
+        let (mut editor, _, clip_id) = fixture();
+        let clip = editor.project().active().clip(&clip_id).unwrap().clone();
+        let early = attached_marker(&mut editor, &clip_id, clip.start + 0.25);
+        let late = attached_marker(&mut editor, &clip_id, clip.start + clip.duration - 0.25);
+        let cut = clip.start + clip.duration / 2.0;
+
+        let tail = editor
+            .apply(Command::SplitClips {
+                clip_ids: vec![clip_id.clone()],
+                time: cut,
+            })
+            .expect("splits")
+            .created_id
+            .expect("tail");
+        let project = editor.project().active();
+        assert_eq!(
+            project.marker(&early).unwrap().clip_id.as_deref(),
+            Some(clip_id.as_str())
+        );
+        assert_eq!(
+            project.marker(&late).unwrap().clip_id.as_deref(),
+            Some(tail.as_str())
+        );
+        assert_eq!(
+            project.marker(&late).unwrap().time,
+            clip.start + clip.duration - 0.25
+        );
+
+        // Trimming the head past the early marker lets it go in place.
+        editor
+            .apply(Command::TrimClip {
+                clip_id: clip_id.clone(),
+                edge: TrimEdge::Start,
+                delta: 0.5,
+            })
+            .expect("trims");
+        let marker = editor.project().active().marker(&early).unwrap();
+        assert!(marker.clip_id.is_none());
+        assert_eq!(marker.time, clip.start + 0.25);
     }
 
     #[test]

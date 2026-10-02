@@ -16,7 +16,11 @@ use puppetcat_media::ReaderPool;
 use puppetcat_project::Command;
 use puppetcat_project::model::ClipKind;
 
+mod batch;
+mod layouts;
 mod lifecycle;
+pub use batch::{BatchPlan, BatchRangeArg, BatchRequest};
+pub use layouts::{ApplyLayoutReport, ClipSelector, LayoutValues};
 pub use lifecycle::{MoveOutputReport, RelinkEntry, RelinkReport};
 
 use crate::analysis::{self, AudioAnalysis, FeatureBucket};
@@ -1272,6 +1276,188 @@ mod tests {
         assert!(!report.committed);
         assert_eq!(report.items[0].status, "missing");
         assert_eq!(agent.get_state().unwrap().revision, revision);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A scratch project holding one 10s video clip on track T1.
+    fn project_with_clip(name: &str) -> (std::path::PathBuf, AgentEngine, String) {
+        let root = scratch(name);
+        let agent = engine(&root);
+        agent
+            .create_project(
+                &root.join("projects").to_string_lossy(),
+                name,
+                1920,
+                1080,
+                30,
+                1,
+            )
+            .expect("creates");
+        let view = agent
+            .apply(Command::AddMedia {
+                item: puppetcat_project::commands::NewMedia {
+                    path: "/nowhere/clip.mp4".to_owned(),
+                    name: "clip.mp4".to_owned(),
+                    duration: Some(10.0),
+                    kind: puppetcat_project::model::MediaKind::Video,
+                    width: None,
+                    height: None,
+                    frame_rate: None,
+                    frame_rate_fraction: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    has_audio: false,
+                },
+            })
+            .expect("adds media");
+        let media = view.created_id.expect("media id");
+        let view = agent
+            .apply(Command::AddClip {
+                media_id: media,
+                track_id: "T1".to_owned(),
+                start: 0.0,
+            })
+            .expect("adds clip");
+        let clip = view.created_id.expect("clip id");
+        (root, agent, clip)
+    }
+
+    #[test]
+    fn layouts_save_apply_roundtrip_and_undo() {
+        let (root, agent, clip) = project_with_clip("layouts");
+        let corner = LayoutValues {
+            scale: Some(0.3),
+            offset_x: Some(0.35),
+            offset_y: Some(0.35),
+            ..Default::default()
+        };
+        agent
+            .save_layout_template("corner", None, corner)
+            .expect("saves");
+        let selector = || ClipSelector {
+            track_id: Some("T1".to_owned()),
+            ..Default::default()
+        };
+
+        let dry = agent
+            .apply_layout_template("corner", selector(), true)
+            .expect("dry");
+        assert_eq!((dry.committed, dry.changed), (false, 1));
+        let done = agent
+            .apply_layout_template("corner", selector(), false)
+            .expect("applies");
+        assert!(done.committed);
+        let state = agent.get_state().unwrap();
+        let styled = state
+            .project
+            .active()
+            .clips
+            .iter()
+            .find(|c| c.id == clip)
+            .unwrap();
+        assert_eq!(styled.scale, 0.3);
+        agent.undo().unwrap();
+        let state = agent.get_state().unwrap();
+        assert_eq!(state.project.active().clips[0].scale, 1.0);
+
+        assert!(
+            agent
+                .apply_layout_template("nope", selector(), false)
+                .is_err()
+        );
+
+        let file = root.join("layouts.json");
+        assert_eq!(
+            agent
+                .export_layout_templates(&file.to_string_lossy(), false)
+                .unwrap(),
+            1
+        );
+        assert!(
+            agent
+                .export_layout_templates(&file.to_string_lossy(), false)
+                .is_err()
+        );
+        agent.remove_layout_template("corner").unwrap();
+        let names = agent
+            .import_layout_templates(&file.to_string_lossy(), false)
+            .unwrap();
+        assert_eq!(names, vec!["corner".to_owned()]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn batch_export_preflight_rejects_bad_plans_before_rendering() {
+        let (root, agent, _clip) = project_with_clip("batch");
+        for (name, time) in [
+            ("Hook start", 1.0),
+            ("Hook end", 3.0),
+            ("Tail start", 5.0),
+            ("Tail end", 8.0),
+        ] {
+            agent
+                .apply(Command::AddMarker {
+                    time,
+                    name: Some(name.to_owned()),
+                    clip_id: None,
+                })
+                .unwrap();
+        }
+        let out = root.join("out");
+        let request = |ranges: Vec<BatchRangeArg>, pair: bool| BatchRequest {
+            ranges,
+            pair_by_name: pair,
+            template: "{index}-{name}".to_owned(),
+            output_dir: out.to_string_lossy().into_owned(),
+            crf: 18,
+            preset: "medium".to_owned(),
+            collision: "fail".to_owned(),
+            head: 0.5,
+            tail: 0.5,
+            dry_run: true,
+        };
+
+        let plan = agent
+            .start_batch_export(request(vec![], true))
+            .expect("pairs by name");
+        assert!(!plan.started);
+        assert_eq!(plan.items.len(), 2);
+        assert!(plan.items[0].output.ends_with("01-hook.mp4"));
+        assert_eq!(plan.items[0].range, (0.5, 3.5));
+        assert!(!out.exists(), "a dry run writes nothing");
+
+        let range = |start, end| BatchRangeArg {
+            start: Some(start),
+            end: Some(end),
+            ..Default::default()
+        };
+        assert!(
+            agent
+                .start_batch_export(request(vec![range(1.0, 5.0), range(4.0, 6.0)], false))
+                .is_err(),
+            "overlap"
+        );
+        assert!(
+            agent
+                .start_batch_export(request(vec![range(5.0, 2.0)], false))
+                .is_err(),
+            "reversed"
+        );
+        assert!(
+            agent.start_batch_export(request(vec![], false)).is_err(),
+            "nothing to export"
+        );
+
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("01-hook.mp4"), b"x").unwrap();
+        assert!(
+            agent.start_batch_export(request(vec![], true)).is_err(),
+            "existing file"
+        );
+        let mut skipping = request(vec![], true);
+        skipping.collision = "skip".to_owned();
+        let plan = agent.start_batch_export(skipping).unwrap();
+        assert!(plan.items[0].skip && !plan.items[1].skip);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

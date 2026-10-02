@@ -475,6 +475,41 @@ pub struct Project {
     /// it always names a member of `timelines`; [`Project::active`] degrades
     /// to the first timeline if it somehow does not.
     pub active_timeline_id: String,
+    /// Named picture layouts (transform, crop, opacity, blend) that can be
+    /// stamped onto clips. Travels with the project.
+    pub layouts: Vec<LayoutTemplate>,
+}
+
+/// A reusable placement of a picture in the frame. Offsets and crop are
+/// fractions of the frame/source, so a layout survives a change of output
+/// size.
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutTemplate {
+    /// Unique within the project; the name commands refer to it by.
+    pub name: String,
+    /// Multiplier over the fitted size.
+    pub scale: f64,
+    /// Horizontal offset from centred, as a fraction of frame width.
+    pub offset_x: f64,
+    /// Vertical offset from centred, as a fraction of frame height.
+    pub offset_y: f64,
+    /// Clockwise rotation in degrees.
+    pub rotation: f64,
+    /// Blend strength, 0..1.
+    pub opacity: f64,
+    /// Mirrored left to right.
+    #[serde(default)]
+    pub flip_h: bool,
+    /// Mirrored top to bottom.
+    #[serde(default)]
+    pub flip_v: bool,
+    /// Blend mode name; empty is normal.
+    #[serde(default)]
+    pub blend: String,
+    /// Source crop.
+    #[serde(default)]
+    pub crop: Option<Crop>,
 }
 
 impl Project {
@@ -498,6 +533,7 @@ impl Project {
                 markers: Vec::new(),
             }],
             active_timeline_id: "TL1".to_owned(),
+            layouts: Vec::new(),
         }
     }
 

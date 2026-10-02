@@ -420,6 +420,82 @@ pub struct MoveOutputParams {
     pub verify: Option<bool>,
 }
 
+/// Parameters for `start_batch_export`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StartBatchExportParams {
+    /// Stretches to export, each to its own file. Omit with `pairByName`.
+    pub ranges: Option<Vec<crate::engine::BatchRangeArg>>,
+    /// Derive ranges from markers named "<label> start" / "<label> end"
+    /// (or "in" / "out").
+    pub pair_by_name: Option<bool>,
+    /// Filename without extension. Fields: {name}, {index} (two digits),
+    /// {project}. Default "{name}".
+    pub filename_template: Option<String>,
+    /// Absolute folder for the files; created if missing.
+    pub output_dir: String,
+    /// x264 CRF, default 18.
+    pub crf: Option<u8>,
+    /// x264 preset, default "medium".
+    pub preset: Option<String>,
+    /// What to do when a file exists: "fail" (default), "skip", "overwrite"
+    /// or "suffix". Repeat a failed batch with "skip" to resume it.
+    pub collision: Option<String>,
+    /// Seconds of handle before each start.
+    pub head_seconds: Option<f64>,
+    /// Seconds of handle after each end.
+    pub tail_seconds: Option<f64>,
+    /// Return the preflighted plan without rendering.
+    pub dry_run: Option<bool>,
+}
+
+/// Parameters for `save_layout_template`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveLayoutParams {
+    /// Layout name; saving an existing name replaces it.
+    pub name: String,
+    /// Copy the starting values from this clip on the active timeline.
+    pub from_clip_id: Option<String>,
+    /// Values to set (override the source clip's).
+    pub values: Option<crate::engine::LayoutValues>,
+}
+
+/// Parameters for `remove_layout_template`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RemoveLayoutParams {
+    /// Layout name.
+    pub name: String,
+}
+
+/// Parameters for `apply_layout_template`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyLayoutParams {
+    /// Layout name.
+    pub name: String,
+    /// Clips to restyle.
+    pub clip_ids: Option<Vec<String>>,
+    /// Or every visual clip on this track...
+    pub track_id: Option<String>,
+    /// ...ending after this time (seconds)...
+    pub from: Option<f64>,
+    /// ...and starting before this one.
+    pub to: Option<f64>,
+    /// Report which clips would change without changing them.
+    pub dry_run: Option<bool>,
+}
+
+/// Parameters for layout export/import.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutFileParams {
+    /// Absolute path of the JSON file.
+    pub path: String,
+    /// Replace an existing file (export) or same-named layouts (import).
+    pub overwrite: Option<bool>,
+}
+
 /// Parameters for `apply_edit_plan`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -807,6 +883,137 @@ impl ConcatAgentServer {
             )
             .map_err(to_mcp_err)
             .and_then(|report| ok_json(&report))
+    }
+
+    // ── batch export ──
+
+    #[tool(
+        description = "Export several stretches of the timeline, each to its own mp4, from one preflighted plan. Ranges come from `ranges` (seconds or markers) or, with `pairByName`, from markers named \"<label> start\"/\"<label> end\". Rejects empty, reversed or overlapping ranges, clashing filenames and (by default) existing files before rendering. Runs sequentially in the background; poll get_batch_export_status. A failed item does not stop the rest; resume by repeating the call with collision \"skip\". `dryRun` returns the plan only."
+    )]
+    fn start_batch_export(
+        &self,
+        Parameters(params): Parameters<StartBatchExportParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .start_batch_export(crate::engine::BatchRequest {
+                ranges: params.ranges.unwrap_or_default(),
+                pair_by_name: params.pair_by_name.unwrap_or(false),
+                template: params
+                    .filename_template
+                    .unwrap_or_else(|| "{name}".to_owned()),
+                output_dir: params.output_dir,
+                crf: params.crf.unwrap_or(18),
+                preset: params.preset.unwrap_or_else(|| "medium".to_owned()),
+                collision: params.collision.unwrap_or_else(|| "fail".to_owned()),
+                head: params.head_seconds.unwrap_or(0.0),
+                tail: params.tail_seconds.unwrap_or(0.0),
+                dry_run: params.dry_run.unwrap_or(false),
+            })
+            .map_err(to_mcp_err)
+            .and_then(|plan| ok_json(&plan))
+    }
+
+    #[tool(
+        description = "Per-item progress of the latest batch export: pending, running, done, skipped, failed (with error) or cancelled."
+    )]
+    fn get_batch_export_status(&self) -> Result<CallToolResult, McpError> {
+        ok_json(&self.engine.batch_export_status())
+    }
+
+    #[tool(
+        description = "Stop the running export or batch export at the next frame. Remaining batch items are marked cancelled."
+    )]
+    fn cancel_export(&self) -> Result<CallToolResult, McpError> {
+        self.engine.cancel_export();
+        ok_json(&serde_json::json!({ "cancelRequested": true }))
+    }
+
+    // ── layouts ──
+
+    #[tool(
+        description = "List the project's saved picture layouts (scale, offset, rotation, opacity, flips, blend, crop)."
+    )]
+    fn list_layout_templates(&self) -> Result<CallToolResult, McpError> {
+        self.engine
+            .list_layout_templates()
+            .map_err(to_mcp_err)
+            .and_then(|layouts| ok_json(&layouts))
+    }
+
+    #[tool(
+        description = "Save a named layout, copied from a clip (`fromClipId`) and/or given as `values`. Offsets are fractions of the frame, so a layout survives an output-size change. Replaces a layout of the same name. Stored in the project."
+    )]
+    fn save_layout_template(
+        &self,
+        Parameters(params): Parameters<SaveLayoutParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .save_layout_template(
+                &params.name,
+                params.from_clip_id.as_deref(),
+                params.values.unwrap_or_default(),
+            )
+            .map_err(to_mcp_err)
+            .and_then(|layout| ok_json(&layout))
+    }
+
+    #[tool(description = "Delete a saved layout by name.")]
+    fn remove_layout_template(
+        &self,
+        Parameters(params): Parameters<RemoveLayoutParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .remove_layout_template(&params.name)
+            .map_err(to_mcp_err)?;
+        ok_json(&serde_json::json!({ "removed": params.name }))
+    }
+
+    #[tool(
+        description = "Apply a saved layout to clips chosen by `clipIds` and/or a track (optionally within a time span). One undo step; audio clips are skipped. `dryRun` reports which clips would change."
+    )]
+    fn apply_layout_template(
+        &self,
+        Parameters(params): Parameters<ApplyLayoutParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .apply_layout_template(
+                &params.name,
+                crate::engine::ClipSelector {
+                    clip_ids: params.clip_ids.unwrap_or_default(),
+                    track_id: params.track_id,
+                    from: params.from,
+                    to: params.to,
+                },
+                params.dry_run.unwrap_or(false),
+            )
+            .map_err(to_mcp_err)
+            .and_then(|report| ok_json(&report))
+    }
+
+    #[tool(
+        description = "Write all saved layouts to a JSON file so another project can import them. Refuses to replace a file unless `overwrite`."
+    )]
+    fn export_layout_templates(
+        &self,
+        Parameters(params): Parameters<LayoutFileParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .export_layout_templates(&params.path, params.overwrite.unwrap_or(false))
+            .map_err(to_mcp_err)
+            .and_then(|count| ok_json(&serde_json::json!({ "exported": count })))
+    }
+
+    #[tool(
+        description = "Import layouts from a file written by export_layout_templates. Same-named layouts are kept unless `overwrite`. One undo step."
+    )]
+    fn import_layout_templates(
+        &self,
+        Parameters(params): Parameters<LayoutFileParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .import_layout_templates(&params.path, params.overwrite.unwrap_or(false))
+            .map_err(to_mcp_err)
+            .and_then(|names| ok_json(&serde_json::json!({ "imported": names })))
     }
 
     // ── media ──

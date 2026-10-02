@@ -446,6 +446,26 @@ pub enum Command {
         #[serde(default)]
         clip_id: Option<String>,
     },
+    /// Saves a layout under its name, replacing one of the same name. A blank
+    /// name is a no-op.
+    SaveLayoutTemplate {
+        /// The layout to keep.
+        layout: crate::model::LayoutTemplate,
+    },
+    /// Deletes a layout by name. An unknown name is a no-op.
+    RemoveLayoutTemplate {
+        /// The layout to drop.
+        name: String,
+    },
+    /// Stamps a saved layout onto clips: scale, offset, rotation, opacity,
+    /// flips, blend and crop. Errs if the layout does not exist; unknown or
+    /// non-visual clip ids are skipped.
+    ApplyLayoutTemplate {
+        /// The layout to apply.
+        name: String,
+        /// The clips to restyle.
+        clip_ids: Vec<String>,
+    },
     /// Points a bin item at a different file - the relink after media was
     /// moved or replaced. Only the path changes: the id, name and every clip
     /// cut from it stay, so the caller is responsible for checking the new
@@ -592,6 +612,9 @@ pub enum CommandError {
     /// [`Command::RemoveTimeline`] would have deleted the last timeline.
     #[error("A project needs at least one timeline.")]
     LastTimeline,
+    /// A command was refused for a reason specific to its arguments.
+    #[error("{0}")]
+    Rejected(String),
 }
 
 /// Mints ids. Owned by the editor so restored projects advance it past every
@@ -1820,6 +1843,86 @@ fn apply_command(
             };
             // Bitwise so neither assignment is short-circuited away.
             let applied = assign(&mut marker.clip_id, clip_id) | assign(&mut marker.offset, offset);
+            Ok(Outcome {
+                created_id: None,
+                applied,
+            })
+        }
+
+        Command::SaveLayoutTemplate { mut layout } => {
+            layout.name = layout.name.trim().to_owned();
+            if layout.name.is_empty() {
+                return Ok(Outcome::default());
+            }
+            layout.opacity = layout.opacity.clamp(0.0, 1.0);
+            match project.layouts.iter_mut().find(|l| l.name == layout.name) {
+                Some(existing) if *existing == layout => return Ok(Outcome::default()),
+                Some(existing) => *existing = layout,
+                None => project.layouts.push(layout),
+            }
+            Ok(Outcome {
+                created_id: None,
+                applied: true,
+            })
+        }
+
+        Command::RemoveLayoutTemplate { name } => {
+            let count = project.layouts.len();
+            project.layouts.retain(|layout| layout.name != name);
+            Ok(Outcome {
+                created_id: None,
+                applied: project.layouts.len() != count,
+            })
+        }
+
+        Command::ApplyLayoutTemplate { name, clip_ids } => {
+            let layout = project
+                .layouts
+                .iter()
+                .find(|layout| layout.name == name)
+                .cloned()
+                .ok_or_else(|| CommandError::Rejected(format!("no layout named \"{name}\"")))?;
+            let mut applied = false;
+            for clip in project
+                .active_mut()
+                .clips
+                .iter_mut()
+                .filter(|clip| clip_ids.contains(&clip.id))
+                .filter(|clip| !matches!(clip.kind, ClipKind::Audio))
+            {
+                let before = (
+                    clip.scale,
+                    clip.offset_x,
+                    clip.offset_y,
+                    clip.rotation,
+                    clip.opacity,
+                    clip.flip_h,
+                    clip.flip_v,
+                    clip.blend.clone(),
+                    clip.crop,
+                );
+                clip.scale = layout.scale;
+                clip.offset_x = layout.offset_x;
+                clip.offset_y = layout.offset_y;
+                clip.rotation = layout.rotation;
+                clip.opacity = layout.opacity;
+                clip.flip_h = layout.flip_h;
+                clip.flip_v = layout.flip_v;
+                clip.blend = layout.blend.clone();
+                clip.crop = layout.crop;
+                applied |= before
+                    != (
+                        clip.scale,
+                        clip.offset_x,
+                        clip.offset_y,
+                        clip.rotation,
+                        clip.opacity,
+                        clip.flip_h,
+                        clip.flip_v,
+                        clip.blend.clone(),
+                        clip.crop,
+                    );
+            }
             Ok(Outcome {
                 created_id: None,
                 applied,

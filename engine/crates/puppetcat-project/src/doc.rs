@@ -371,6 +371,10 @@ pub fn from_document(document: &Value) -> Option<Project> {
         fonts,
         timelines,
         active_timeline_id,
+        layouts: document
+            .get("layouts")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -436,6 +440,12 @@ pub fn to_document(settings: &DocumentSettings, project: &Project) -> Value {
         serde_json::to_value(&project.timelines).expect("serialises"),
     );
     document.insert("activeTimelineId".into(), json!(project.active_timeline_id));
+    if !project.layouts.is_empty() {
+        document.insert(
+            "layouts".into(),
+            serde_json::to_value(&project.layouts).expect("serialises"),
+        );
+    }
     Value::Object(document)
 }
 

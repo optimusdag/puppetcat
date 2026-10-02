@@ -659,15 +659,32 @@ pub fn mux(video: &Path, audio: &Path, output: &Path) -> Result<()> {
         .map(|stream| stream.time_base())
         .unwrap_or(audio_tb);
 
-    // Alternate one packet from each; `write_interleaved` orders them by
-    // timestamp. When either input ends, the file ends: `-shortest`.
-    let mut copy = |input: &mut ffmpeg::format::context::Input,
-                    wanted: usize,
-                    from: ffmpeg::Rational,
-                    to: ffmpeg::Rational,
-                    stream: usize,
-                    path: &Path|
-     -> Result<bool> {
+    // Each stream copies to completion on its own; `write_interleaved` puts
+    // the two back in timestamp order in the output regardless of which
+    // order they are fed in, so nothing here has to interleave them by
+    // hand.
+    //
+    // This used to alternate one packet from each stream per turn, on the
+    // premise that running either one dry would mean the other was also
+    // effectively done - the `-shortest` a straight concat wants. But video
+    // and audio packets are not one-to-one: video is one packet per frame,
+    // while AAC is one packet per encoder frame (1024 samples, here about
+    // 21 ms) - a wholly different rate. Alternating strictly one-for-one
+    // ran out of video packets after `total_frames` turns and quit right
+    // there, having copied only `total_frames` audio packets - a small
+    // fraction of a much longer audio track - and silently truncated the
+    // sound to that. Copying each stream independently to its own real EOF
+    // fixes that; a duration mismatch between the two is `mix_to_file`'s
+    // problem to avoid (and `verify_mixed_duration`, in `puppetcat-export`,
+    // catches it if it does not), not something this function should paper
+    // over by cutting either stream short.
+    let mut copy_all = |input: &mut ffmpeg::format::context::Input,
+                        wanted: usize,
+                        from: ffmpeg::Rational,
+                        to: ffmpeg::Rational,
+                        stream: usize,
+                        path: &Path|
+     -> Result<()> {
         loop {
             let mut packet = ffmpeg::Packet::empty();
             match packet.read(input) {
@@ -681,21 +698,14 @@ pub fn mux(video: &Path, audio: &Path, output: &Path) -> Result<()> {
                     packet
                         .write_interleaved(&mut out)
                         .map_err(|error| ffi::fail("write packet", output, error))?;
-                    return Ok(true);
                 }
-                Err(ffmpeg::Error::Eof) => return Ok(false),
+                Err(ffmpeg::Error::Eof) => return Ok(()),
                 Err(error) => return Err(ffi::fail("read", path, error)),
             }
         }
     };
-    loop {
-        if !copy(&mut video_in, video_index, video_tb, out_video_tb, 0, video)? {
-            break;
-        }
-        if !copy(&mut audio_in, audio_index, audio_tb, out_audio_tb, 1, audio)? {
-            break;
-        }
-    }
+    copy_all(&mut video_in, video_index, video_tb, out_video_tb, 0, video)?;
+    copy_all(&mut audio_in, audio_index, audio_tb, out_audio_tb, 1, audio)?;
     out.write_trailer()
         .map_err(|error| ffi::fail("write trailer", output, error))
 }
@@ -847,3 +857,92 @@ mod tests {
         }
     }
 }
+
+    /// End to end against a real FFmpeg: video is one packet per frame,
+    /// AAC is one packet per ~1024 samples - a different rate, so 5s of
+    /// 30fps video (150 packets) and 5s of 48kHz AAC (roughly 235 packets)
+    /// land on very different counts for the same real duration. `mux`
+    /// used to alternate the two one-for-one and quit the moment either
+    /// ran dry, which meant it quit after 150 turns having written only
+    /// 150 of the audio track's ~235 packets - about 3.2s of a 5s track,
+    /// silently. Skips silently without FFmpeg (both the crate's own
+    /// encoder for video, and the `ffmpeg` binary directly for a real AAC
+    /// track, since this crate has no audio encoder of its own to test
+    /// against).
+    #[test]
+    fn mux_copies_the_whole_audio_track_even_at_a_different_packet_rate() {
+        use crate::{EncodeOptions, Encoder, FrameSink};
+        use puppetcat_core::frame::Frame;
+        use puppetcat_core::time::FrameRate;
+
+        let dir = std::env::temp_dir();
+        let video_path = dir.join("mux-rate-test-video.mp4");
+        let audio_path = dir.join("mux-rate-test-audio.m4a");
+        let out_path = dir.join("mux-rate-test-out.mp4");
+
+        let Ok(mut encoder) =
+            Encoder::create(&video_path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
+        else {
+            return; // no ffmpeg here
+        };
+        for _ in 0..150 {
+            encoder.write_frame(&Frame::black(64, 64)).expect("writes");
+        }
+        encoder.finish().expect("finishes");
+
+        let ffmpeg = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000:duration=5",
+                "-c:a",
+                "aac",
+            ])
+            .arg(&audio_path)
+            .output();
+        let Ok(ffmpeg) = ffmpeg else {
+            let _ = std::fs::remove_file(&video_path);
+            return; // no ffmpeg binary on PATH
+        };
+        if !ffmpeg.status.success() {
+            let _ = std::fs::remove_file(&video_path);
+            return;
+        }
+
+        mux(&video_path, &audio_path, &out_path).expect("muxes");
+
+        // The container's own duration is not enough here - it reflects
+        // whichever stream the muxer counts as authoritative, typically the
+        // video, so it would have read as 5s even with the truncated audio
+        // this test exists to catch. `ffprobe`'s own per-stream durations
+        // are what actually tell the two apart.
+        let probe = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(&out_path)
+            .output()
+            .expect("ffprobe is here, ffmpeg just proved it above");
+        let audio_seconds: f64 = String::from_utf8_lossy(&probe.stdout)
+            .trim()
+            .parse()
+            .expect("ffprobe prints a number");
+
+        assert!(
+            audio_seconds > 4.5,
+            "the whole 5s audio track should survive the mux, got {audio_seconds}s"
+        );
+
+        let _ = std::fs::remove_file(&video_path);
+        let _ = std::fs::remove_file(&audio_path);
+        let _ = std::fs::remove_file(&out_path);
+    }

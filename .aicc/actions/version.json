@@ -1,0 +1,30 @@
+{
+  "group": "Version",
+  "icon": "package",
+  "buttons": [
+    {
+      "label": "Bump Major Version",
+      "type": "command",
+      "command": "cd \"${CWD}\" && f=engine/Cargo.toml && cur=$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' \"$f\" | head -1) && IFS=. read -r maj min pat <<< \"$cur\" && new=\"$((maj+1)).0.0\" && sed -i '' \"s/^version = \\\"$cur\\\"/version = \\\"$new\\\"/\" \"$f\" && echo \"Bumped $cur -> $new\"",
+      "output": "inline",
+      "icon": "arrow-big-up",
+      "color": "#ef4444"
+    },
+    {
+      "label": "Bump Minor Version",
+      "type": "command",
+      "command": "cd \"${CWD}\" && f=engine/Cargo.toml && cur=$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' \"$f\" | head -1) && IFS=. read -r maj min pat <<< \"$cur\" && new=\"$maj.$((min+1)).0\" && sed -i '' \"s/^version = \\\"$cur\\\"/version = \\\"$new\\\"/\" \"$f\" && echo \"Bumped $cur -> $new\"",
+      "output": "inline",
+      "icon": "arrow-up",
+      "color": "#3b82f6"
+    },
+    {
+      "label": "Bump Bug Fix Version",
+      "type": "command",
+      "command": "cd \"${CWD}\" && f=engine/Cargo.toml && cur=$(sed -n 's/^version = \"\\(.*\\)\"/\\1/p' \"$f\" | head -1) && IFS=. read -r maj min pat <<< \"$cur\" && new=\"$maj.$min.$((pat+1))\" && sed -i '' \"s/^version = \\\"$cur\\\"/version = \\\"$new\\\"/\" \"$f\" && echo \"Bumped $cur -> $new\"",
+      "output": "inline",
+      "icon": "bug",
+      "color": "#22c55e"
+    }
+  ]
+}

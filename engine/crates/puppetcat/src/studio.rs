@@ -3357,6 +3357,16 @@ impl Studio {
     fn poll_lock(&mut self) {
         let Some(session) = self.session.as_ref() else {
             self.lock_watch.stop();
+        // Every project mints its own ids from 1, so a media item's id here
+        // recurs across unrelated projects - the art below is keyed by that
+        // id alone, and without this it would answer a request for this
+        // project's "m1" with the decode left over from the last project's
+        // own "m1".
+        self.peaks.clear();
+        self.thumbs.clear();
+        self.strips.clear();
+        self.art_pending.clear();
+        self.waves.borrow_mut().clear();
             return;
         };
         let root = std::path::PathBuf::from(session.path());
@@ -3502,6 +3512,14 @@ impl Studio {
             }
         };
         let output = format!(
+        // See the matching comment in `load`: these are keyed by an id this
+        // project minted, which the next project opened will mint again
+        // from scratch.
+        self.peaks.clear();
+        self.thumbs.clear();
+        self.strips.clear();
+        self.art_pending.clear();
+        self.waves.borrow_mut().clear();
             "{}/{}.mp4",
             self.export.folder.trim_end_matches('/'),
             self.export.name.trim()

@@ -122,6 +122,7 @@ fn main() -> Result<(), slint::PlatformError> {
         editor.set_clips(ModelRc::from(models.clips.clone()));
         editor.set_markers(ModelRc::from(models.markers.clone()));
         app.set_export_markers(ModelRc::from(models.export_markers.clone()));
+        app.set_export_sizes(ModelRc::from(models.export_sizes.clone()));
         editor.set_stage_items(ModelRc::from(models.stage.clone()));
         editor.set_stage_guides(ModelRc::from(models.guides.clone()));
         editor.set_media(ModelRc::from(models.media.clone()));

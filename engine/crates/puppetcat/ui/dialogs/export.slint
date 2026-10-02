@@ -159,6 +159,8 @@ export component ExportDialog inherits Modal {
     in property <ExportData> data;
     /// the timeline's markers by time, for "between markers"
     in property <[string]> markers;
+    /// the resolution rungs in the project's own shape, e.g. "1080 × 1920"
+    in property <[string]> sizes;
 
     callback range-mode-changed(index: int);
     callback range-marker-changed(which: int, index: int);
@@ -301,7 +303,7 @@ export component ExportDialog inherits Modal {
                 label: "Resolution";
                 Select {
                     current: root.data.resolution;
-                    options: ["3840 × 2160", "2560 × 1440", "1920 × 1080", "1280 × 720"];
+                    options: root.sizes;
                     details: ["4K", "QHD", "1080p", "720p"];
                     changed(index) => { root.resolution-changed(index); }
                 }

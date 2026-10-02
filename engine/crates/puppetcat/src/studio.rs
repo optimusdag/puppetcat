@@ -186,6 +186,15 @@ impl ExportRangeMode {
     }
 }
 
+/// A `width` x `height` frame scaled so its shorter side is `short` pixels,
+/// both sides even (H.264 wants that), the shape kept.
+pub fn fit_short_side(width: u32, height: u32, short: u32) -> (u32, u32) {
+    let (width, height) = (width.max(2), height.max(2));
+    let scale = f64::from(short) / f64::from(width.min(height));
+    let even = |side: u32| ((f64::from(side) * scale / 2.0).round() as u32).max(1) * 2;
+    (even(width), even(height))
+}
+
 /// Seconds from what a person types: "90", "1:30", "1:30.5", "0:01:30".
 pub fn parse_time(text: &str) -> Option<f64> {
     let mut seconds = 0.0_f64;
@@ -471,6 +480,8 @@ pub struct Models {
     pub timeline_menu: Rc<VecModel<MenuItemData>>,
     /// The export sheet's marker choices, by time.
     pub export_markers: Rc<VecModel<SharedString>>,
+    /// The export sheet's resolution rungs, in this project's own shape.
+    pub export_sizes: Rc<VecModel<SharedString>>,
     pub av: Rc<VecModel<MenuItemData>>,
     pub bar: Rc<VecModel<MenuItemData>>,
     pub transcribers: Rc<VecModel<ModelData>>,
@@ -507,6 +518,7 @@ impl Models {
             marker_menu: Rc::new(VecModel::default()),
             timeline_menu: Rc::new(VecModel::default()),
             export_markers: Rc::new(VecModel::default()),
+            export_sizes: Rc::new(VecModel::default()),
             av: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
             transcribers: Rc::new(VecModel::default()),
@@ -3611,8 +3623,18 @@ impl Studio {
         }
     }
 
+    /// The pixel size of one rung of the resolution ladder for this project.
+    /// The ladder names a short side (2160, 1440, 1080, 720), and the frame
+    /// keeps the project's own shape: a vertical or square project exports
+    /// vertical or square, not squeezed into a landscape 16:9.
+    pub fn export_dimensions(&self, rung: usize) -> (u32, u32) {
+        let short = EXPORT_SIZES[rung.min(3)].1;
+        let (width, height) = self.output_size();
+        fit_short_side(width, height, short)
+    }
+
     pub fn export_size_bytes(&self, tier: usize) -> f32 {
-        let (width, height) = EXPORT_SIZES[self.export.resolution.min(3)];
+        let (width, height) = self.export_dimensions(self.export.resolution);
         let (num, den) = EXPORT_RATES[self.export.rate.min(2)];
         let rate = num as f32 / den as f32;
         let pixels = (width as f32 * height as f32) / (1920.0 * 1080.0);
@@ -3671,7 +3693,7 @@ impl Studio {
             .map(|title| title.clip)
             .collect();
         let mut request = export::request(session, &spec, titles);
-        let (width, height) = EXPORT_SIZES[self.export.resolution.min(3)];
+        let (width, height) = self.export_dimensions(self.export.resolution);
         let (num, den) = EXPORT_RATES[self.export.rate.min(2)];
         request.width = width;
         request.height = height;
@@ -4577,6 +4599,15 @@ impl Studio {
 
         app.set_export(self.export_data());
         sync(
+            &models.export_sizes,
+            (0..4)
+                .map(|rung| {
+                    let (width, height) = self.export_dimensions(rung);
+                    SharedString::from(format!("{width} × {height}"))
+                })
+                .collect::<Vec<_>>(),
+        );
+        sync(
             &models.export_markers,
             self.export_markers()
                 .into_iter()
@@ -4632,7 +4663,7 @@ impl Studio {
     }
 
     fn export_data(&self) -> ExportData {
-        let (width, height) = EXPORT_SIZES[self.export.resolution.min(3)];
+        let (width, height) = self.export_dimensions(self.export.resolution);
         let (num, den) = EXPORT_RATES[self.export.rate.min(2)];
         let rate = num as f32 / den as f32;
         let clips = self.timeline().clips.len();
@@ -5190,6 +5221,15 @@ impl Studio {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn export_sizes_keep_the_projects_shape() {
+        assert_eq!(fit_short_side(1920, 1080, 1080), (1920, 1080));
+        assert_eq!(fit_short_side(1080, 1920, 1080), (1080, 1920));
+        assert_eq!(fit_short_side(1080, 1920, 2160), (2160, 3840));
+        assert_eq!(fit_short_side(1080, 1080, 720), (720, 720));
+        assert_eq!(fit_short_side(1920, 1080, 720), (1280, 720));
+    }
+
+    #[test]
     fn typed_times_parse_as_clock_or_seconds() {
         assert_eq!(parse_time("90"), Some(90.0));
         assert_eq!(parse_time("1:30"), Some(90.0));
@@ -5201,7 +5241,7 @@ mod tests {
         assert_eq!(clock(90.5), "1:30.5");
     }
 
-    use super::{Footprint, Studio, clock, parse_time};
+    use super::{Footprint, Studio, clock, fit_short_side, parse_time};
 
     const FRAME: (u32, u32) = (1920, 1080);
 

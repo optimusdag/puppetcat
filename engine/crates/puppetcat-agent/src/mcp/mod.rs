@@ -366,6 +366,60 @@ pub struct RemoveMarkerParams {
     pub marker_id: String,
 }
 
+/// Parameters for `set_export_directory`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SetExportDirectoryParams {
+    /// Absolute folder path for exports.
+    pub directory: String,
+    /// Create the folder (and parents) if missing. Default false.
+    pub create: Option<bool>,
+}
+
+/// Parameters for `rename_project`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RenameProjectParams {
+    /// The new display name.
+    pub name: String,
+}
+
+/// Parameters for `move_project`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MoveProjectParams {
+    /// Exact new absolute path of the project folder. Must not exist; its
+    /// parent must.
+    pub destination: String,
+}
+
+/// Parameters for `relink_media`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RelinkMediaParams {
+    /// Explicit item-to-file replacements.
+    pub entries: Option<Vec<crate::engine::RelinkEntry>>,
+    /// Bulk mode: every media path under this folder is rewritten to the same
+    /// relative path under `newRoot`.
+    pub old_root: Option<String>,
+    /// The folder that replaces `oldRoot`.
+    pub new_root: Option<String>,
+    /// Probe and report without changing anything. Default false.
+    pub dry_run: Option<bool>,
+}
+
+/// Parameters for `move_output`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveOutputParams {
+    /// The rendered file to move.
+    pub source: String,
+    /// Exact destination file path.
+    pub destination: String,
+    /// Replace an existing destination. Default false.
+    pub overwrite: Option<bool>,
+    /// Compare bytes before deleting the source. Default true.
+    pub verify: Option<bool>,
+}
+
 /// Parameters for `apply_edit_plan`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -668,6 +722,91 @@ impl ConcatAgentServer {
             .validate_timeline(params.timeline_id.as_deref())
             .map_err(to_mcp_err)
             .and_then(|value| ok_json(&value))
+    }
+
+    // ── lifecycle ──
+
+    #[tool(
+        description = "Set the folder exports go to and save the project. The folder must exist unless `create` is true."
+    )]
+    fn set_export_directory(
+        &self,
+        Parameters(params): Parameters<SetExportDirectoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .set_export_directory(&params.directory, params.create.unwrap_or(false))
+            .map_err(to_mcp_err)
+            .and_then(|path| ok_json(&serde_json::json!({ "exportDirectory": path })))
+    }
+
+    #[tool(
+        description = "Rename the open project's display name and manifest. The folder is not renamed; use move_project for that."
+    )]
+    fn rename_project(
+        &self,
+        Parameters(params): Parameters<RenameProjectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .rename_project(&params.name)
+            .map_err(to_mcp_err)
+            .and_then(|name| ok_json(&serde_json::json!({ "name": name })))
+    }
+
+    #[tool(
+        description = "Move the open project's folder to an exact new path and reopen it there. Refuses an existing destination and cross-volume moves. Saves first, updates recents, and repoints project-owned media. Returns the project info at its new location."
+    )]
+    fn move_project(
+        &self,
+        Parameters(params): Parameters<MoveProjectParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .move_project(&params.destination)
+            .map_err(to_mcp_err)
+            .and_then(|info| ok_json(&info))
+    }
+
+    #[tool(
+        description = "Repoint media at replacement files, one by one (`entries`) or by swapping a folder prefix (`oldRoot` -> `newRoot`). Each replacement is probed and checked for kind, audio and duration; if any item fails, nothing changes. Use `dryRun` to see per-item verdicts first. One undo step."
+    )]
+    fn relink_media(
+        &self,
+        Parameters(params): Parameters<RelinkMediaParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let roots = match (params.old_root, params.new_root) {
+            (Some(old), Some(new)) => Some((old, new)),
+            (None, None) => None,
+            _ => {
+                return Err(to_mcp_err(
+                    "oldRoot and newRoot must be given together".to_owned(),
+                ));
+            }
+        };
+        self.engine
+            .relink_media(
+                params.entries.unwrap_or_default(),
+                roots,
+                params.dry_run.unwrap_or(false),
+            )
+            .map_err(to_mcp_err)
+            .and_then(|report| ok_json(&report))
+    }
+
+    #[tool(
+        description = "Move a rendered file to an exact destination. Never overwrites unless `overwrite`. Copies to a temp name, verifies, renames, and only then deletes the source."
+    )]
+    fn move_output(
+        &self,
+        Parameters(params): Parameters<MoveOutputParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .move_output(
+                &params.source,
+                &params.destination,
+                params.overwrite.unwrap_or(false),
+                params.verify.unwrap_or(true),
+            )
+            .map_err(to_mcp_err)
+            .and_then(|report| ok_json(&report))
     }
 
     // ── media ──

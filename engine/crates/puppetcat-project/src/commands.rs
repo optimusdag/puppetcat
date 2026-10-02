@@ -446,6 +446,17 @@ pub enum Command {
         #[serde(default)]
         clip_id: Option<String>,
     },
+    /// Points a bin item at a different file - the relink after media was
+    /// moved or replaced. Only the path changes: the id, name and every clip
+    /// cut from it stay, so the caller is responsible for checking the new
+    /// file is a compatible stand-in. An unknown id or an unchanged path is
+    /// a no-op.
+    SetMediaPath {
+        /// The bin item to repoint.
+        media_id: String,
+        /// The file that now backs it.
+        path: String,
+    },
     /// Attaches a marker to a clip (it keeps its current time, so it will
     /// follow the clip from here on), or detaches it with `None`.
     AttachMarker {
@@ -1809,6 +1820,22 @@ fn apply_command(
             };
             // Bitwise so neither assignment is short-circuited away.
             let applied = assign(&mut marker.clip_id, clip_id) | assign(&mut marker.offset, offset);
+            Ok(Outcome {
+                created_id: None,
+                applied,
+            })
+        }
+
+        Command::SetMediaPath { media_id, path } => {
+            let applied = project
+                .media
+                .iter_mut()
+                .find(|item| item.id == media_id)
+                .is_some_and(|item| {
+                    let changed = item.path != path;
+                    item.path = path;
+                    changed
+                });
             Ok(Outcome {
                 created_id: None,
                 applied,

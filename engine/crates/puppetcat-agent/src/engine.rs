@@ -16,6 +16,9 @@ use puppetcat_media::ReaderPool;
 use puppetcat_project::Command;
 use puppetcat_project::model::ClipKind;
 
+mod lifecycle;
+pub use lifecycle::{MoveOutputReport, RelinkEntry, RelinkReport};
+
 use crate::analysis::{self, AudioAnalysis, FeatureBucket};
 use crate::export::{ExportJob, ExportStatus};
 use crate::query::{self, TimelineSummary, ValidationReport};

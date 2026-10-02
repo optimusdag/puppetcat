@@ -2198,7 +2198,7 @@ fn apply_command(
             let old_end = clip.start + clip.duration;
             let mut trimmed = vec![clip_id.clone()];
             if link_policy == LinkPolicy::Preserve {
-                trimmed.extend(linked_partners(&timeline, &[clip_id.clone()]));
+                trimmed.extend(linked_partners(&timeline, std::slice::from_ref(&clip_id)));
             }
             let mut change = 0.0;
             let mut applied = false;

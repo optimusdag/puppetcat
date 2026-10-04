@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 PuppetCat contributors
 
-//! Starting an export and polling it, the way a thin agent tool needs to:
-//! one call to start, repeated calls to check in on. `puppetcat_host::export`
-//! itself is a blocking call plus a progress callback - this is the seam
-//! that runs it on its own thread and remembers where it got to.
+//! Starting an export, or a batch of them, and polling it: one call to start,
+//! repeated calls to check in on. [`crate::export`] itself is a blocking call
+//! plus a progress callback - this is the seam that runs it on its own thread
+//! and remembers where it got to. The agent's export tools and the window's
+//! batch sheet both run through it.
 
 use std::sync::{Arc, Mutex};
 
-use puppetcat_host::Session;
-use puppetcat_host::export::{
-    ExportClip, ExportRequest, ExportSpec, Exporter, Progress, request, run,
-};
+use crate::Session;
+use crate::export::{ExportClip, ExportRequest, ExportSpec, Exporter, Progress, request, run};
 use serde::Serialize;
 
 /// A snapshot of one export's progress, for `get_export_status`.
@@ -93,6 +92,15 @@ impl ExportJob {
     /// An idle job: nothing running, no status yet.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A job that shares `exporter`'s slot, so it and whoever else holds a
+    /// clone of that exporter can never render at the same time.
+    pub fn with_exporter(exporter: Exporter) -> Self {
+        Self {
+            exporter,
+            ..Self::default()
+        }
     }
 
     /// The last known progress. Never blocks on the render thread.

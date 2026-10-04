@@ -6,13 +6,13 @@
 //! reversed or overlapping ranges, clashing or existing filenames - is
 //! rejected before the first frame renders.
 
-use std::path::PathBuf;
-
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 use super::{AgentEngine, ExportRangeArgs, no_project};
 use crate::export::{BatchItem, BatchStatus};
+use puppetcat_host::batch_plan::{self, PlanOptions};
+pub use puppetcat_host::batch_plan::PlannedExport;
 
 /// One requested stretch.
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
@@ -56,22 +56,6 @@ pub struct BatchRequest {
     pub dry_run: bool,
 }
 
-/// One planned file.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PlannedExport {
-    /// Position from 1.
-    pub index: usize,
-    /// Label.
-    pub name: String,
-    /// Output file.
-    pub output: String,
-    /// Exported stretch including handles.
-    pub range: (f64, f64),
-    /// Will be skipped because the file exists and policy is `skip`.
-    pub skip: bool,
-}
-
 /// What `start_batch_export` returns.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,15 +69,6 @@ pub struct BatchPlan {
 impl AgentEngine {
     /// Preflights and starts a batch export; poll `batch_export_status`.
     pub fn start_batch_export(&self, req: BatchRequest) -> Result<BatchPlan, String> {
-        if !matches!(
-            req.collision.as_str(),
-            "fail" | "skip" | "overwrite" | "suffix"
-        ) {
-            return Err("collision must be fail, skip, overwrite or suffix".to_owned());
-        }
-        if req.head < 0.0 || req.tail < 0.0 {
-            return Err("head and tail cannot be negative".to_owned());
-        }
         let guard = self.session_lock();
         let session = guard.as_ref().ok_or_else(no_project)?;
         let timeline = session.project().active();
@@ -105,7 +80,15 @@ impl AgentEngine {
             if !req.pair_by_name {
                 return Err("give ranges, or set pairByName to derive them from markers".to_owned());
             }
-            args = pair_markers(timeline);
+            args = batch_plan::pair_markers(timeline)
+                .into_iter()
+                .map(|pair| BatchRangeArg {
+                    name: Some(pair.label),
+                    from_marker: Some(pair.from_marker),
+                    to_marker: Some(pair.to_marker),
+                    ..Default::default()
+                })
+                .collect();
             if args.is_empty() {
                 return Err(
                     "no marker pairs found: name them \"<label> start\" and \"<label> end\""
@@ -140,65 +123,18 @@ impl AgentEngine {
                 .unwrap_or_else(|| format!("range-{}", index + 1));
             resolved.push((name, (start, end)));
         }
-        let mut order: Vec<usize> = (0..resolved.len()).collect();
-        order.sort_by(|a, b| resolved[*a].1.0.total_cmp(&resolved[*b].1.0));
-        for pair in order.windows(2) {
-            let (first, second) = (&resolved[pair[0]], &resolved[pair[1]]);
-            if second.1.0 < first.1.1 {
-                return Err(format!(
-                    "ranges \"{}\" and \"{}\" overlap",
-                    first.0, second.0
-                ));
-            }
-        }
-
-        let dir = PathBuf::from(&req.output_dir);
-        if !dir.is_absolute() {
-            return Err(format!("{} is not an absolute path", req.output_dir));
-        }
-        let mut used: Vec<PathBuf> = Vec::new();
-        let mut planned = Vec::new();
-        let mut clashes = Vec::new();
-        for (index, (name, range)) in resolved.iter().enumerate() {
-            let stem = expand(&req.template, name, index + 1, &project_name)?;
-            let stem = puppetcat_host::projects::folder_name(&stem);
-            let mut path = dir.join(format!("{stem}.mp4"));
-            if used.contains(&path) {
-                return Err(format!("two ranges would write {}", path.display()));
-            }
-            let mut skip = false;
-            if path.exists() {
-                match req.collision.as_str() {
-                    "fail" => clashes.push(path.display().to_string()),
-                    "skip" => skip = true,
-                    "suffix" => {
-                        let mut n = 2;
-                        while path.exists() || used.contains(&path) {
-                            path = dir.join(format!("{stem}-{n}.mp4"));
-                            n += 1;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            used.push(path.clone());
-            planned.push(PlannedExport {
-                index: index + 1,
-                name: name.clone(),
-                output: path.to_string_lossy().into_owned(),
-                range: (
-                    (range.0 - req.head).max(0.0),
-                    (range.1 + req.tail).min(duration),
-                ),
-                skip,
-            });
-        }
-        if !clashes.is_empty() {
-            return Err(format!(
-                "these files already exist (use collision skip, suffix or overwrite): {}",
-                clashes.join(", ")
-            ));
-        }
+        let planned = batch_plan::plan_files(
+            &resolved,
+            duration,
+            &PlanOptions {
+                template: &req.template,
+                output_dir: &req.output_dir,
+                collision: &req.collision,
+                head: req.head,
+                tail: req.tail,
+                project_name: &project_name,
+            },
+        )?;
         if req.dry_run {
             return Ok(BatchPlan {
                 started: false,
@@ -206,6 +142,7 @@ impl AgentEngine {
             });
         }
 
+        let dir = std::path::PathBuf::from(&req.output_dir);
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         let titles: Vec<_> = self
@@ -254,82 +191,5 @@ impl AgentEngine {
     /// Stops the running export or batch at the next frame.
     pub fn cancel_export(&self) {
         self.export.cancel();
-    }
-}
-
-fn expand(template: &str, name: &str, index: usize, project: &str) -> Result<String, String> {
-    let mut out = String::new();
-    let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        out.push_str(&rest[..open]);
-        let close = rest[open..]
-            .find('}')
-            .ok_or_else(|| format!("unclosed {{ in template \"{template}\""))?
-            + open;
-        match &rest[open + 1..close] {
-            "name" => out.push_str(name),
-            "index" => out.push_str(&format!("{index:02}")),
-            "project" => out.push_str(project),
-            other => return Err(format!("unknown template field {{{other}}}")),
-        }
-        rest = &rest[close + 1..];
-    }
-    out.push_str(rest);
-    if out.trim().is_empty() {
-        return Err("the filename template produced an empty name".to_owned());
-    }
-    Ok(out)
-}
-
-/// Pairs `<label> start|in` with the next `<label> end|out`, by name.
-fn pair_markers(timeline: &puppetcat_project::model::Timeline) -> Vec<BatchRangeArg> {
-    let mut markers: Vec<_> = timeline.markers.iter().collect();
-    markers.sort_by(|a, b| a.time.total_cmp(&b.time));
-    let split = |name: &str| -> Option<(String, bool)> {
-        let lower = name.trim().to_lowercase();
-        for (suffix, is_start) in [
-            (" start", true),
-            (" in", true),
-            (" end", false),
-            (" out", false),
-        ] {
-            if let Some(label) = lower.strip_suffix(suffix) {
-                return Some((label.trim().to_owned(), is_start));
-            }
-        }
-        None
-    };
-    let mut pairs = Vec::new();
-    for (i, start) in markers.iter().enumerate() {
-        let Some((label, true)) = split(&start.name) else {
-            continue;
-        };
-        if let Some(end) = markers[i + 1..]
-            .iter()
-            .find(|m| split(&m.name) == Some((label.clone(), false)))
-        {
-            pairs.push(BatchRangeArg {
-                name: Some(label),
-                from_marker: Some(start.id.clone()),
-                to_marker: Some(end.id.clone()),
-                ..Default::default()
-            });
-        }
-    }
-    pairs
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn templates_expand_known_fields_and_reject_unknown_ones() {
-        assert_eq!(
-            expand("{index}-{name}", "intro", 3, "P").unwrap(),
-            "03-intro"
-        );
-        assert!(expand("{nope}", "a", 1, "P").is_err());
-        assert!(expand("{name", "a", 1, "P").is_err());
     }
 }

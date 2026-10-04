@@ -14,7 +14,7 @@
 pub mod catalogue;
 pub mod dto;
 pub mod engine;
-pub mod export;
+pub use puppetcat_host::batch_export as export;
 pub mod mcp;
 pub mod query;
 pub mod snapshot;

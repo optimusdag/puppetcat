@@ -10,7 +10,7 @@
 
 ### 🧱 Editor & Core Architecture
 
-* [ ] 🌟 **PuppetCat API** — A stable API shared by the PuppetCat UI, plugins, scripts, automation, and MCP integrations.
+* [x] 🌟 **PuppetCat API** — A stable API shared by the PuppetCat UI, plugins, scripts, automation, and MCP integrations. *(Built: an MCP server and a CLI over one engine; every editing command is reachable, and the window calls the same shared functions.)*
 * [ ] 🌟 **Extensible Effects Runtime** — A scalable, data-driven system capable of supporting hundreds of effects, filters, transitions, and generators, including custom WGSL shaders.
 * [ ] **Hardware Analysis** — Detect device capabilities and performance tier so PuppetCat can automatically choose appropriate playback, rendering, proxy, and processing settings.
 * [ ] **Customizable Workspace** — Allow panels to be moved, resized, docked, and rearranged similar to Blender and other professional creative tools.
@@ -32,9 +32,9 @@
 ### 🎬 Timeline & Animation
 
 * [ ] 🌟 **Keyframe Graph Editor** — Fine-grained control over animation curves, easing, interpolation, and effect parameters.
-* [ ] **Speed Curves / Time Remapping** — Custom speed ramps, reusable velocity presets, and improved slow/fast-motion workflows.
+* [ ] **Speed Curves / Time Remapping** — Custom speed ramps, reusable velocity presets, and improved slow/fast-motion workflows. *(Partly built: the engine supports speed curves, reverse and constant speed; curve presets and a curve editor are not verified.)*
 * [ ] **Adjustment Layers** — Apply effects, filters, and color adjustments across multiple clips.
-* [ ] **Scene Detection** — Detect cuts in imported footage and optionally split clips automatically.
+* [ ] **Scene Detection** — Detect cuts in imported footage and optionally split clips automatically. *(Partly built: `detect_scenes` and Clip > Detect scenes find the cuts and mark them; splitting at them automatically is not.)*
 * [ ] **Beat Detection & Beat Markers** — Analyze music and create timeline markers for rhythm-based editing.
 * [ ] **Auto Cut / Beat Sync** — Automatically create edits synchronized to music and detected beats.
 
@@ -48,9 +48,9 @@
 
 ### 🎙️ Audio
 
-* [ ] 🌟 **Noise Removal / Voice Cleanup** — Local audio denoising and speech enhancement.
-* [ ] **Silence Detection & Removal** — Automatically detect silent regions and optionally remove them from the timeline.
-* [ ] **Audio Normalization** — Quickly normalize dialogue and other audio to useful loudness targets.
+* [x] 🌟 **Noise Removal / Voice Cleanup** — Local audio denoising and speech enhancement. *(Built: the Noise Reduction and Enhance Voice audio effects (FFmpeg `afftdn`).)*
+* [x] **Silence Detection & Removal** — Automatically detect silent regions and optionally remove them from the timeline. *(Built: `analyze_audio` finds it, `remove_silence` and the window's Remove silence sheet cut it.)*
+* [x] **Audio Normalization** — Quickly normalize dialogue and other audio to useful loudness targets. *(Built: the Normalize Loudness audio effect (EBU R128).)*
 * [ ] **Beat Analysis** — Reusable audio analysis infrastructure for beat detection, synchronization, and music-driven effects.
 
 ### 👁️ Tracking, Masks & Computer Vision
@@ -60,7 +60,7 @@
 * [ ] **Automatic Face Detection & Blurring** — Detect and optionally track faces for automatic privacy blurring.
 * [ ] **Background Removal** — Local subject segmentation and background removal without requiring a green screen.
 * [ ] **Auto Reframe** — Automatically reframe footage for different aspect ratios while keeping important subjects in view.
-* [ ] **Chroma Key** — Green/blue-screen removal with adjustable tolerance, spill suppression, feathering, and masking.
+* [ ] **Chroma Key** — Green/blue-screen removal with adjustable tolerance, spill suppression, feathering, and masking. *(Partly built: the Green Screen and Blue Screen effects, with similarity and softness; spill suppression is not.)*
 
 ### 🔎 Media Intelligence & Automation
 

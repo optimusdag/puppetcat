@@ -24,6 +24,7 @@ pub mod bookends;
 pub mod dirs;
 pub mod export;
 pub mod jobs;
+pub mod layouts;
 pub mod lifecycle;
 pub mod lock;
 pub mod media;

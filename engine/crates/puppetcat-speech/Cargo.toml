@@ -9,6 +9,7 @@ description = "Speech in and out: on-device transcription with whisper.cpp, and 
 [dependencies]
 puppetcat-host.workspace = true
 puppetcat-media.workspace = true
+puppetcat-project.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 

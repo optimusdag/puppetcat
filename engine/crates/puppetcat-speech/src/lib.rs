@@ -17,6 +17,7 @@
 //! (sherpa-onnx's static libraries) stays out of everything that does not
 //! speak.
 
+pub mod edits;
 pub mod transcribe;
 pub mod tts;
 

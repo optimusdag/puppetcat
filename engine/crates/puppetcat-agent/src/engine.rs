@@ -19,9 +19,11 @@ use puppetcat_project::model::ClipKind;
 mod batch;
 mod layouts;
 mod lifecycle;
+mod speech;
 pub use batch::{BatchPlan, BatchRangeArg, BatchRequest};
 pub use layouts::{ApplyLayoutReport, ClipSelector, LayoutValues};
 pub use lifecycle::{MoveOutputReport, RelinkEntry, RelinkReport};
+pub use speech::{CaptionResult, VoiceRequest, VoiceResult};
 
 use crate::export::{ExportJob, ExportStatus};
 use crate::query::{self, TimelineSummary, ValidationReport};
@@ -320,6 +322,8 @@ pub struct AgentEngine {
     titles: puppetcat_host::Titles,
     open: Mutex<Option<OpenProject>>,
     export: ExportJob,
+    transcriber: std::sync::Arc<puppetcat_speech::Transcriber>,
+    speech: std::sync::Arc<puppetcat_speech::Speech>,
 }
 
 impl AgentEngine {
@@ -341,6 +345,8 @@ impl AgentEngine {
             titles,
             open: Mutex::new(None),
             export: ExportJob::new(),
+            transcriber: std::sync::Arc::new(puppetcat_speech::Transcriber::new()),
+            speech: std::sync::Arc::new(puppetcat_speech::Speech::new()),
         })
     }
 
@@ -1915,6 +1921,34 @@ mod tests {
                 .markers
                 .is_empty()
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn speech_tools_say_what_to_download_when_no_model_is_there() {
+        let (root, agent, clip) = project_with_clip("speech");
+        let status = agent.speech_status().expect("lists");
+        for kind in ["transcriber", "voice"] {
+            let models = status[kind]["models"].as_array().expect("models");
+            assert!(!models.is_empty(), "{kind} models are listed");
+            assert!(models.iter().all(|m| m["downloaded"] == false), "{kind}");
+        }
+        assert!(
+            status["voice"]["voices"]
+                .as_array()
+                .is_some_and(|v| !v.is_empty())
+        );
+
+        let caption = agent.caption_clip(&clip, None, None).unwrap_err();
+        assert!(caption.contains("download_speech_model"), "{caption}");
+        let voice = agent
+            .generate_voice(VoiceRequest {
+                text: Some("hello".to_owned()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(voice.contains("download_speech_model"), "{voice}");
+        assert!(agent.download_speech_model("nonsense", "x").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 

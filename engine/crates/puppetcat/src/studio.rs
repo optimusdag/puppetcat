@@ -30,6 +30,7 @@ use puppetcat_host::playback::ClipSpec;
 use puppetcat_host::preview::FrameSpec;
 use puppetcat_host::{ProjectInfo, Session, Slot, SlotLock, media, projects, templates};
 use puppetcat_media::Peaks;
+use puppetcat_speech::edits;
 use puppetcat_project::commands::{ClipMove, ClipPatch, TrackFlag, TrimEdge};
 use puppetcat_project::model::{
     self, AppliedFilter, Clip, Marker, Project, TextAlign, TextStyle, Timeline, Track, Transition,
@@ -142,7 +143,7 @@ pub const LANGUAGES: [&str; 1] = ["English"];
 pub const TRANSCRIBE_LANGUAGES: [&str; 3] = ["auto", "en", "zh"];
 
 /// The default Kokoro speaker: `af_heart`.
-const DEFAULT_VOICE: i32 = 3;
+const DEFAULT_VOICE: i32 = edits::DEFAULT_VOICE;
 
 /// The export sheet's state.
 pub struct ExportState {
@@ -3949,17 +3950,11 @@ impl Studio {
         let Some(id) = self.sole_selection() else {
             return;
         };
-        let Some(clip) = self.clip(&id).cloned() else {
-            return;
-        };
-        let Some(media) = self.project().media_by_id(&clip.media_id).cloned() else {
-            self.notify("This clip has no file to transcribe", true);
-            return;
-        };
         let Some(model) = self
             .transcribers
             .iter()
             .find(|model| model.active && model.installed)
+            .map(|model| model.id.clone())
         else {
             self.notify(
                 "Download a transcriber model in Settings > Transcriber first",
@@ -3967,43 +3962,29 @@ impl Studio {
             );
             return;
         };
-        let request = puppetcat_speech::transcribe::TranscribeRequest {
-            path: media.path.clone(),
-            source_start: clip.source_start,
-            window: clip.duration * clip.speed,
-            language: self.language_code().to_owned(),
-            model_id: model.id.clone(),
+        let plan = match edits::caption_plan(self.project(), &id, self.language_code(), &model) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.notify(&error, true);
+                return;
+            }
         };
         let dirs = self.host.dirs.clone();
         let transcriber = Arc::clone(&self.host.transcriber);
         self.notify("Transcribing…", false);
         spawn(
-            move || transcriber.transcribe(&dirs, &request, |_| {}),
+            move || {
+                let segments = transcriber.transcribe(&dirs, &plan.request, |_| {})?;
+                Ok::<_, String>(edits::caption_commands(&plan, &segments))
+            },
             move |studio, _, _, result| match result {
-                Ok(segments) => {
-                    let commands: Vec<Command> = segments
-                        .iter()
-                        .map(|segment| Command::AddTextClip {
-                            track_id: None,
-                            start: clip.start + segment.start / clip.speed,
-                            style: Some(TextStyle {
-                                content: segment.text.clone(),
-                                font_family: "Inter".to_owned(),
-                                font_size: 0.05,
-                                font_weight: 600.0,
-                                ..TextStyle::default()
-                            }),
-                            duration: Some(((segment.end - segment.start) / clip.speed).max(0.2)),
-                            offset_y: Some(0.35),
-                        })
-                        .collect();
+                Ok(commands) if commands.is_empty() => {
+                    studio.notify("Nothing was said in that clip", true);
+                }
+                Ok(commands) => {
                     let count = commands.len();
-                    if count == 0 {
-                        studio.notify("Nothing was said in that clip", true);
-                    } else {
-                        studio.apply(Command::Batch { commands });
-                        studio.notify(&format!("Added {count} captions"), false);
-                    }
+                    studio.apply(Command::Batch { commands });
+                    studio.notify(&format!("Added {count} captions"), false);
                 }
                 Err(error) => studio.notify(&error, true),
             },
@@ -4016,46 +3997,54 @@ impl Studio {
         let Some(id) = self.sole_selection() else {
             return;
         };
-        let Some(clip) = self.clip(&id).cloned() else {
-            return;
-        };
-        let Some(text) = clip.text.as_ref().map(|text| text.content.clone()) else {
+        let is_title = self
+            .clip(&id)
+            .is_some_and(|clip| clip.kind == model::ClipKind::Text);
+        if !is_title {
             self.notify("Select a title to speak", true);
             return;
-        };
+        }
         let Some(model) = self
             .voices
             .iter()
             .find(|model| model.active && model.installed)
+            .map(|model| model.id.clone())
         else {
             self.notify("Download a voice model in Settings > Speech first", true);
             return;
         };
-        let Some(project) = self
+        let Some(project_dir) = self
             .session
             .as_ref()
             .map(|session| session.path().to_owned())
         else {
             return;
         };
-        let request = puppetcat_speech::tts::SpeakRequest {
-            model_id: model.id.clone(),
-            voice: self.prefs.tts_voice.unwrap_or(DEFAULT_VOICE),
-            text,
-            speed: 1.0,
-            project,
+        let plan = match edits::speak_title_plan(
+            self.project(),
+            &id,
+            &project_dir,
+            &model,
+            self.prefs.tts_voice.unwrap_or(DEFAULT_VOICE),
+            1.0,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.notify(&error, true);
+                return;
+            }
         };
         let dirs = self.host.dirs.clone();
         let speech = Arc::clone(&self.host.speech);
         self.notify("Generating voice…", false);
         spawn(
             move || {
-                let spoken = speech.speak(&dirs, &request, |_| {})?;
+                let spoken = speech.speak(&dirs, &plan.request, |_| {})?;
                 let summary = media::probe(&spoken.path)?;
-                Ok::<_, String>(summary)
+                Ok::<_, String>((summary, plan.start))
             },
             move |studio, _, _, result| match result {
-                Ok(summary) => {
+                Ok((summary, start)) => {
                     let created = studio.apply(Command::AddMedia {
                         item: summary.to_new_media(),
                     });
@@ -4068,10 +4057,7 @@ impl Studio {
                             .map(|item| item.id.clone())
                     });
                     if let Some(media_id) = media_id {
-                        studio.apply(Command::AddClipAtFirstFree {
-                            media_id,
-                            start: clip.start,
-                        });
+                        studio.apply(edits::voice_clip_command(media_id, start));
                         studio.notify("Voice added at the title", false);
                     }
                 }

@@ -186,6 +186,47 @@ pub struct ListCatalogueParams {
     pub include_params: Option<bool>,
 }
 
+/// Parameters for `download_speech_model`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadSpeechModelParams {
+    /// `transcriber` (whisper, for captions) or `voice` (Kokoro, for speech).
+    pub kind: String,
+    /// A model id from `speech_status`.
+    pub id: String,
+}
+
+/// Parameters for `caption_clip`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionClipParams {
+    /// The active-timeline clip whose sound is transcribed.
+    pub clip_id: String,
+    /// A whisper language code such as `en`, or `auto` (the default).
+    pub language: Option<String>,
+    /// A transcriber model id; defaults to the first one downloaded.
+    pub model_id: Option<String>,
+}
+
+/// Parameters for `generate_voice`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateVoiceParams {
+    /// A title clip whose words are spoken; the voice starts where it starts.
+    pub clip_id: Option<String>,
+    /// Or the words themselves. Give one of `clipId` and `text`.
+    pub text: Option<String>,
+    /// Timeline seconds where the voice starts when `text` is given.
+    /// Defaults to 0.
+    pub start: Option<f64>,
+    /// A Kokoro speaker id from `speech_status`. Defaults to `af_heart`.
+    pub voice: Option<i32>,
+    /// Speaking rate; 1 is natural. Defaults to 1.
+    pub speed: Option<f32>,
+    /// A voice model id; defaults to the first one downloaded.
+    pub model_id: Option<String>,
+}
+
 /// Filters and inclusion controls for a compact timeline summary.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -699,6 +740,7 @@ impl ConcatAgentServer {
                 "removeSilence": true,
                 "detectScenes": true,
                 "listCatalogue": true,
+                "speech": true,
                 "batchExport": true,
                 "layoutTemplates": true,
                 "mediaRelink": true,
@@ -880,6 +922,72 @@ impl ConcatAgentServer {
         )
         .map_err(to_mcp_err)
         .and_then(|value| ok_json(&value))
+    }
+
+    #[tool(
+        description = "List the speech models and what each is for: `transcriber` (whisper, used by `caption_clip`) and `voice` (Kokoro, used by `generate_voice`, with its speaker list), whether each is downloaded, and its size. Downloads are on demand via `download_speech_model`."
+    )]
+    fn speech_status(&self) -> Result<CallToolResult, McpError> {
+        self.engine
+            .speech_status()
+            .map_err(to_mcp_err)
+            .and_then(|value| ok_json(&value))
+    }
+
+    #[tool(
+        description = "Download one speech model and wait until it is on disk. `kind` is `transcriber` or `voice`; pick the id from `speech_status`. Models are tens to hundreds of megabytes, so this can take minutes."
+    )]
+    async fn download_speech_model(
+        &self,
+        Parameters(params): Parameters<DownloadSpeechModelParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let engine = self.engine.clone();
+        tokio::task::spawn_blocking(move || engine.download_speech_model(&params.kind, &params.id))
+            .await
+            .map_err(|error| to_mcp_err(format!("download task panicked: {error}")))?
+            .map_err(to_mcp_err)?;
+        ok_json(&serde_json::json!({ "downloaded": true }))
+    }
+
+    #[tool(
+        description = "Auto captions: transcribe one clip's sound and add the words to the timeline as title clips, one per spoken segment, as one undoable edit. Needs a downloaded transcriber model (see `speech_status`). Returns the segments (seconds from the start of the clip's source window) and how many captions were added."
+    )]
+    async fn caption_clip(
+        &self,
+        Parameters(params): Parameters<CaptionClipParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let engine = self.engine.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            engine.caption_clip(&params.clip_id, params.language, params.model_id)
+        })
+        .await
+        .map_err(|error| to_mcp_err(format!("transcription task panicked: {error}")))?
+        .map_err(to_mcp_err)?;
+        ok_json(&result)
+    }
+
+    #[tool(
+        description = "Generate a voice: speak a title clip's words (`clipId`) or some `text`, write the WAV into the project, and put it on the timeline at the title's start (or at `start`). Needs a downloaded voice model (see `speech_status`). Returns the file, its length and the bin item it became."
+    )]
+    async fn generate_voice(
+        &self,
+        Parameters(params): Parameters<GenerateVoiceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let engine = self.engine.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            engine.generate_voice(crate::engine::VoiceRequest {
+                clip_id: params.clip_id,
+                text: params.text,
+                start: params.start,
+                voice: params.voice,
+                speed: params.speed,
+                model_id: params.model_id,
+            })
+        })
+        .await
+        .map_err(|error| to_mcp_err(format!("speech task panicked: {error}")))?
+        .map_err(to_mcp_err)?;
+        ok_json(&result)
     }
 
     #[tool(

@@ -4,7 +4,9 @@
 
 # PuppetCat
 
-**A free, open-source CapCut-style video editor.**
+**The open-source video editor your AI agent can actually use.**
+
+Every feature is available to people in the window *and* to agents over MCP.
 
 <p align="center">
   <a href="https://github.com/optimusdag/puppetcat/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/optimusdag/puppetcat/ci.yml?style=flat&logo=githubactions&logoColor=F8F8F8&label=Build&labelColor=000000&color=c6f432" alt="Build Status" /></a>
@@ -13,7 +15,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-c6f432?style=flat&logo=gnu&logoColor=F8F8F8&labelColor=000000" alt="License: AGPL-3.0-or-later" /></a>
 </p>
 
-<img src="assets/preview-dark.png" alt="PuppetCat editor" width="100%" />
+<img src="assets/editor-screenshot.png" alt="PuppetCat editor" width="100%" />
 
 </div>
 
@@ -26,6 +28,15 @@ the heavy lifting, a native interface does the editing, and it all runs on
 your machine: install it and start cutting, no account, no extra downloads,
 no setup.
 
+**Where PuppetCat differs from Concat is who it is built for.** Concat is an
+editor for a person at a window. PuppetCat is built to be operated by AI
+agents just as well: the editor is not a GUI with an automation layer bolted
+on. The window and the agent interface sit on the same engine and the same
+commands, so whatever you can do by clicking, an agent can do over
+[MCP](#built-for-agents) — and the other way round. Ask an agent to cut a
+talking-head video to the beat, caption it, and queue the exports; open the
+window and keep editing where it left off.
+
 > [!NOTE]
 > PuppetCat is one native Rust binary: the engine and the Slint editor window
 > live together in [`engine/`](./engine). See
@@ -33,15 +44,73 @@ no setup.
 
 ## Highlights
 
-- Free and local Text-to-Speech features.
-- 🎬 Multi-track editing, with several timelines per project when one isn't enough
-- ✂️ The cutting toolkit you'd expect: split, trim, merge, transitions, speed control
-- 💬 Auto-captions that run entirely on your machine — your audio never leaves it
-- 🎙️ Voice filters for cleaning up or playing with your sound
-- 📝 Titles and styled text
-- 📦 Templates — build an edit once, reuse it for the next video
-- 🚫 No watermarks, no account, nothing behind a paywall
-- 🖥️ Works the same on macOS, Windows and Linux
+**Agent-first, on every feature.** Each item below is something you do in the
+window *and* something an agent does through MCP.
+
+- 🤖 **Agent-native by design** — the whole editor is exposed as MCP tools, not
+  a thin subset. Agents drive a running window live, or work headless.
+- 🎬 **Multi-track editing** — agents add tracks and place, move and
+  trim clips, with several timelines per project
+- ✂️ **The full cutting toolkit** — split, trim, merge, transitions and speed
+  control, each one a tool call; `cut_to_beats` even cuts visuals to detected
+  music beats in one step
+- 💬 **Auto-captions** that run entirely on your machine — an agent can
+  transcribe a clip, and your audio never leaves your computer
+- 🗣️ **Local text-to-speech** — agents can narrate a cut without any cloud service
+- 🎙️ **Voice filters** an agent can apply to clean up or play with sound
+- 📝 **Titles and styled text** added and restyled programmatically
+- 📦 **Templates and batch export** — build a layout once and reapply it, and
+  have an agent queue many exports in a single batch
+- ↩️ **Undoable, validated edits** — agent changes land in the same undo history
+  as yours, and the timeline can be validated before export
+- 📟 **A CLI too** for scripts and pipelines that don't need an agent
+- 🚫 **No watermarks, no account, nothing behind a paywall**
+- 🖥️ **Works the same on macOS, Windows and Linux**
+
+## Built for agents
+
+PuppetCat treats agentic editing as a first-class use, not an afterthought.
+
+- **MCP server.** `puppetcat-agent-mcp` exposes the editor's operations —
+  projects, import, timeline edits, effects, captions, speech, export — as
+  [Model Context Protocol](https://modelcontextprotocol.io) tools that any
+  MCP-capable agent (Claude Code, Codex, and others) can call. It runs headless
+  or attaches to a running PuppetCat window, so you watch the agent's edits
+  appear on your timeline as it makes them.
+- **One implementation, two front ends.** Every feature lives in a shared host
+  layer that the window and the MCP server both call, so nothing is UI-only. A
+  feature isn't done until an agent can reach it.
+- **Structured, undoable edits.** Agents change a project through the same
+  command model the UI uses, including atomic multi-step edit plans, so their
+  work shows up in undo history like anyone else's.
+- **Local and private.** Transcription and speech run on your machine, so an
+  agent can work on footage without uploading it anywhere.
+- **CLI.** `puppetcat-cli` drives the engine without a window, for scripts and
+  pipelines.
+
+### Connect an agent
+
+The MCP server speaks stdio. Build it from source (see
+[`engine/README.md`](./engine/README.md)) and point your agent at the binary,
+for example in an MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "puppetcat": {
+      "command": "/path/to/puppetcat-agent-mcp"
+    }
+  }
+}
+```
+
+If a PuppetCat window is open, the server forwards to it; otherwise it works on
+its own. Then ask for what you want in plain language:
+
+> *Make a new project, import everything in `~/Footage/trip`, cut the clips to
+> the beat of `song.mp3`, add captions, and export 1080p.*
+
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for how the layers fit together.
 
 ## Get started
 
@@ -49,10 +118,10 @@ PuppetCat is currently in **Alpha (pre-release)**. Download the latest build fro
 
 **Platform support:**
 
-- ✅ **Windows** — tested
-- ✅ **macOS** — unsigned binaries; run:
+- ✅ **macOS** — tested; unsigned binaries, so run:
   `xattr -dr com.apple.quarantine /Applications/PuppetCat.app`
-- ✅ **Linux**
+- 🧪 **Windows** — builds are produced, but recent changes haven't been tested on it
+- 🧪 **Linux**
   - 🧪 ARM
   - 🧪 x86_64
 - 🚧 **Android**

@@ -308,6 +308,9 @@ fn main() -> Result<(), slint::PlatformError> {
             *held = kind;
         }
     }));
+    editor.on_modify_project(on_window!(|state| {
+        state.open_project_sheet();
+    }));
     editor.on_dock_dropped(on_dock!(|state, from: i32, onto: i32, side: DockSide| {
         let (from, onto) = (from.max(0) as usize, onto.max(0) as usize);
         if from == onto {

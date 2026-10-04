@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
 
 import { Theme } from "../theme/theme.slint";
-import { Payload } from "../util.slint";
+import { Fmt, Payload } from "../util.slint";
 import { DockSide } from "../dock.slint";
 import { PaneKind } from "pane-switcher.slint";
 import { Editor } from "../editor.slint";
@@ -174,6 +174,17 @@ export component Seat inherits Rectangle {
             peak: Editor.peak;
             add-effect(audio) => { Editor.add-effect(audio); }
             remove-effect(id) => { Editor.remove-effect(id); }
+
+            project-name: Editor.project-name;
+            project-folder: Editor.project-folder;
+            project-output: "\{Editor.output-width} × \{Editor.output-height}";
+            project-rate: "\{Fmt.round-to(Editor.frame-rate, 2)} fps";
+            project-duration: Fmt.frames-timecode(
+                Editor.preview-duration, Editor.frame-rate);
+            count-media: Editor.media-count-all;
+            count-tracks: Editor.tracks.length;
+            count-clips: Editor.clips.length;
+            modify-project => { Editor.modify-project(); }
 
             catalogue-effects: Editor.catalogue-effects;
             catalogue-filters: Editor.catalogue-filters;

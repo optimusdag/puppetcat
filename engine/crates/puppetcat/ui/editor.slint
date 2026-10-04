@@ -94,6 +94,11 @@ export global Editor {
     callback library-save-template();
 
     // ── the inspector ──
+    // The no-selection inspector reads the open project's identity here;
+    // its other facts already live in this global as timeline/monitor data.
+    in-out property <string> project-name;
+    in-out property <string> project-folder;
+    callback modify-project();
     in-out property <SelectedClipData> selected-clip;
     callback clip-set(field: ClipField, value: float);
     callback clip-set-text(field: ClipTextField, value: string);

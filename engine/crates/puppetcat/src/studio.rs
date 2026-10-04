@@ -4583,6 +4583,14 @@ impl Studio {
             .into(),
         );
         app.set_project_name(self.project_name.as_str().into());
+        editor.set_project_name(self.project_name.as_str().into());
+        editor.set_project_folder(
+            self.session
+                .as_ref()
+                .map(|session| session.path())
+                .unwrap_or("—")
+                .into(),
+        );
         app.set_project_status(
             if self.dirty {
                 "unsaved changes"

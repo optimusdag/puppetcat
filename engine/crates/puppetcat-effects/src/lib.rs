@@ -23,6 +23,7 @@ pub mod expr;
 pub mod manifest;
 pub mod shader;
 pub mod template;
+pub mod transitions;
 
 mod builtins {
     include!(concat!(env!("OUT_DIR"), "/builtins.rs"));
@@ -31,6 +32,7 @@ mod builtins {
 pub use catalogue::{At, Catalogue, Fixture, Package};
 pub use manifest::{Kind, Manifest, Param, ParamType};
 pub use shader::Shader;
+pub use transitions::{TRANSITIONS, TransitionInfo};
 
 /// Why a package could not be loaded.
 #[derive(thiserror::Error, Debug)]

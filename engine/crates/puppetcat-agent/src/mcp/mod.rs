@@ -176,6 +176,16 @@ pub struct DetectScenesParams {
     pub add_markers: Option<bool>,
 }
 
+/// Parameters for `list_catalogue`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListCatalogueParams {
+    /// One of `effects`, `filters`, `audio` or `transitions`. Omit for all.
+    pub kind: Option<String>,
+    /// Include each entry's parameters (key, range, default, unit). Default true.
+    pub include_params: Option<bool>,
+}
+
 /// Filters and inclusion controls for a compact timeline summary.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -688,6 +698,7 @@ impl ConcatAgentServer {
                 "rippleDeleteRange": true,
                 "removeSilence": true,
                 "detectScenes": true,
+                "listCatalogue": true,
                 "batchExport": true,
                 "layoutTemplates": true,
                 "mediaRelink": true,
@@ -854,6 +865,21 @@ impl ConcatAgentServer {
         .map_err(|error| to_mcp_err(format!("scene detection task panicked: {error}")))?
         .map_err(to_mcp_err)?;
         ok_json(&result)
+    }
+
+    #[tool(
+        description = "List what can be applied to a clip: video `effects` (blur, key, distortion), colour `filters`, `audio` effects (voices, tone, space, noise removal, loudness) and `transitions`, each with its id, name, category and - for the first three - its parameters (key, range, default, unit). Pass the id to `update_clip`: `patch.videoEffects`, `patch.filters` or `patch.transitionIn`; the result's `usage` field shows the exact shapes."
+    )]
+    fn list_catalogue(
+        &self,
+        Parameters(params): Parameters<ListCatalogueParams>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::catalogue::list(
+            params.kind.as_deref(),
+            params.include_params.unwrap_or(true),
+        )
+        .map_err(to_mcp_err)
+        .and_then(|value| ok_json(&value))
     }
 
     #[tool(

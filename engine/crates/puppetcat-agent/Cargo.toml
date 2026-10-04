@@ -16,6 +16,7 @@ puppetcat-media.workspace = true
 puppetcat-project.workspace = true
 puppetcat-export.workspace = true
 puppetcat-host.workspace = true
+puppetcat-effects.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 

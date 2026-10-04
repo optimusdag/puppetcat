@@ -46,11 +46,13 @@ use crate::host::{Host, MediaArt, image_at, image_of, media_art, on_ui, spawn};
 use crate::prefs::Preferences;
 use crate::ui::*;
 
+mod batch;
 mod cleanup;
 mod files;
 mod ripple;
 pub use files::{ProjectSheet, RelinkState};
 pub use ripple::{BookendsState, RippleState};
+pub use batch::BatchState;
 pub use cleanup::{SilenceScope, SilenceState};
 
 /// The monitor's output sizes, matching the picker's rows.
@@ -489,6 +491,7 @@ pub struct Models {
     /// The export sheet's marker choices, by time.
     pub export_markers: Rc<VecModel<SharedString>>,
     pub relink_rows: Rc<VecModel<RelinkRowData>>,
+    pub batch_rows: Rc<VecModel<BatchRowData>>,
     /// The export sheet's resolution rungs, in this project's own shape.
     pub export_sizes: Rc<VecModel<SharedString>>,
     pub av: Rc<VecModel<MenuItemData>>,
@@ -528,6 +531,7 @@ impl Models {
             timeline_menu: Rc::new(VecModel::default()),
             export_markers: Rc::new(VecModel::default()),
             relink_rows: Rc::new(VecModel::default()),
+            batch_rows: Rc::new(VecModel::default()),
             export_sizes: Rc::new(VecModel::default()),
             av: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
@@ -643,6 +647,7 @@ pub struct Studio {
     pub export: ExportState,
     pub silence: SilenceState,
     pub ripple: RippleState,
+    pub batch: BatchState,
     pub bookends: BookendsState,
     pub relink: RelinkState,
     pub project_sheet: ProjectSheet,
@@ -1040,6 +1045,7 @@ impl Studio {
             export: ExportState::default(),
             silence: SilenceState::default(),
             ripple: RippleState::default(),
+            batch: BatchState::default(),
             bookends: BookendsState::default(),
             relink: RelinkState::default(),
             project_sheet: ProjectSheet::default(),
@@ -4639,6 +4645,8 @@ impl Studio {
         app.set_export(self.export_data());
         app.set_silence(self.silence_data());
         app.set_gap(self.gap_data());
+        app.set_batch(self.batch_data());
+        sync(&models.batch_rows, self.batch_rows());
         app.set_bookends(self.bookends_data());
         app.set_project_sheet(self.project_data());
         app.set_relink(self.relink_data());
@@ -5134,6 +5142,13 @@ impl Studio {
                 row(
                     "export",
                     "Export…".into(),
+                    Glyph::Export,
+                    "",
+                    !self.timeline().clips.is_empty(),
+                ),
+                row(
+                    "batch",
+                    "Export in batch…".into(),
                     Glyph::Export,
                     "",
                     !self.timeline().clips.is_empty(),

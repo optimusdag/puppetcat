@@ -73,7 +73,7 @@ impl Default for SilenceState {
 }
 
 /// `m:ss.s` for a span edge.
-fn clock(seconds: f64) -> String {
+pub(super) fn clock(seconds: f64) -> String {
     let whole = seconds.max(0.0);
     format!("{}:{:04.1}", (whole / 60.0) as u32, whole % 60.0)
 }

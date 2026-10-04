@@ -124,6 +124,7 @@ fn main() -> Result<(), slint::PlatformError> {
         app.set_export_markers(ModelRc::from(models.export_markers.clone()));
         app.set_export_sizes(ModelRc::from(models.export_sizes.clone()));
         app.set_relink_rows(ModelRc::from(models.relink_rows.clone()));
+    app.set_batch_rows(ModelRc::from(models.batch_rows.clone()));
         editor.set_stage_items(ModelRc::from(models.stage.clone()));
         editor.set_stage_guides(ModelRc::from(models.guides.clone()));
         editor.set_media(ModelRc::from(models.media.clone()));
@@ -984,6 +985,37 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_bookends_apply(on_window!(|state| {
         state.apply_bookends();
     }));
+    app.on_batch_closed(on_window!(|state| {
+        state.batch.open = false;
+    }));
+    app.on_batch_browse(on_window!(|state| {
+        state.batch_browse();
+    }));
+    app.on_batch_template_edited(on_window!(|state, text: SharedString| {
+        state.batch.template = text.to_string();
+        state.replan_batch();
+    }));
+    app.on_batch_quality_changed(on_window!(|state, index: i32| {
+        state.batch.quality = (index.max(0) as usize).min(2);
+    }));
+    app.on_batch_collision_changed(on_window!(|state, index: i32| {
+        state.batch.collision = (index.max(0) as usize).min(3);
+        state.replan_batch();
+    }));
+    app.on_batch_head_changed(on_window!(|state, value: f32| {
+        state.batch.head = value;
+        state.replan_batch();
+    }));
+    app.on_batch_tail_changed(on_window!(|state, value: f32| {
+        state.batch.tail = value;
+        state.replan_batch();
+    }));
+    app.on_batch_start(on_window!(|state| {
+        state.start_batch();
+    }));
+    app.on_batch_cancel(on_window!(|state| {
+        state.cancel_batch();
+    }));
     app.on_gap_closed(on_window!(|state| {
         state.ripple.gap_open = false;
     }));
@@ -1174,6 +1206,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         "template" => state.save_template(),
                         "project-sheet" => state.open_project_sheet(),
                         "relink" => state.open_relink(),
+                        "batch" => state.open_batch(),
                         "bookends" => {
                             state.bookends.error.clear();
                             state.bookends.open = true;

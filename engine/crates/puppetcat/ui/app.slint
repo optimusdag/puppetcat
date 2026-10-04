@@ -26,6 +26,7 @@ import { Modal } from "primitives/modal.slint";
 import { ExportData, ExportDialog, ExportPhase } from "dialogs/export.slint";
 import { SilenceData, SilenceDialog, SilencePhase } from "dialogs/silence.slint";
 import { GapData, GapDialog } from "dialogs/gap.slint";
+import { BatchData, BatchDialog, BatchRowData } from "dialogs/batch.slint";
 import { BookendsData, BookendsDialog } from "dialogs/bookends.slint";
 import { ProjectData, ProjectDialog } from "dialogs/project.slint";
 import { RelinkData, RelinkDialog, RelinkRowData } from "dialogs/relink.slint";
@@ -56,7 +57,7 @@ export {
     EffectData, MediaFilter, MediaItemData, MediaKind,
     ClipData, ClipField, ClipKind, ClipTextField, DropData, SelectedClipData,
     StageGuideData, StageItemData, TextAlignment, TimelineTabData, TimelineTool,
-    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, SilenceData, SilencePhase, GapData, BookendsData, ProjectData, RelinkData, RelinkRowData, ModelData, SettingsData,
+    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, SilenceData, SilencePhase, GapData, BatchData, BatchRowData, BookendsData, ProjectData, RelinkData, RelinkRowData, ModelData, SettingsData,
     RecentProjectData, StartData, SystemFactData, ToastData,
 }
 
@@ -141,6 +142,17 @@ export component App inherits Window {
     in property <ExportData> export;
     in property <SilenceData> silence;
     in property <GapData> gap;
+    in property <BatchData> batch;
+    in property <[BatchRowData]> batch-rows;
+    callback batch-closed();
+    callback batch-browse();
+    callback batch-template-edited(text: string);
+    callback batch-quality-changed(index: int);
+    callback batch-collision-changed(index: int);
+    callback batch-head-changed(value: float);
+    callback batch-tail-changed(value: float);
+    callback batch-start();
+    callback batch-cancel();
     in property <BookendsData> bookends;
     callback bookends-closed();
     callback bookends-duration-changed(value: float);
@@ -415,6 +427,25 @@ callback export-closed();
         shift-all-toggled(on) => { root.bookends-shift-all-toggled(on); }
         shift-markers-toggled(on) => { root.bookends-shift-markers-toggled(on); }
         apply => { root.bookends-apply(); }
+    }
+
+    BatchDialog {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        data: root.batch;
+        rows: root.batch-rows;
+
+        closed => { root.batch-closed(); }
+        browse => { root.batch-browse(); }
+        template-edited(text) => { root.batch-template-edited(text); }
+        quality-changed(index) => { root.batch-quality-changed(index); }
+        collision-changed(index) => { root.batch-collision-changed(index); }
+        head-changed(value) => { root.batch-head-changed(value); }
+        tail-changed(value) => { root.batch-tail-changed(value); }
+        start => { root.batch-start(); }
+        cancel => { root.batch-cancel(); }
     }
 
     GapDialog {

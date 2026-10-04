@@ -1,0 +1,230 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 PuppetCat contributors
+
+import { Theme } from "../theme/theme.slint";
+import { Glyph } from "../icons.slint";
+import { Button, DialogRow, DialogSection, Field, Modal, Progress } from "../primitives/modal.slint";
+import { NumberField } from "../primitives/number-field.slint";
+import { Select } from "../primitives/select.slint";
+
+// The batch-export sheet: every stretch between a pair of markers named
+// "<label> start" and "<label> end" becomes its own file. The plan is shown
+// before anything renders, so a name clash or an overlap is a sentence here
+// rather than a failure halfway through.
+
+export struct BatchRowData {
+    name: string,
+    /// "0:12 – 0:48"
+    range: string,
+    /// the file it writes
+    file: string,
+    /// pending, running, done, skipped, failed or cancelled
+    state: string,
+}
+
+export struct BatchData {
+    open: bool,
+    /// the output folder, shortened for display by the caller
+    folder: string,
+    /// `{name}`, `{index}`, `{project}`
+    template: string,
+    quality: int,
+    /// 0 fail, 1 skip, 2 overwrite, 3 suffix
+    collision: int,
+    head: float,
+    tail: float,
+    /// "3 marker pairs" or how to make some
+    summary: string,
+    /// why the plan cannot run
+    error: string,
+    running: bool,
+    /// 0..1 over the whole batch
+    progress: float,
+    /// "Rendering 2 of 4"
+    stage: string,
+    can-start: bool,
+}
+
+component PlanRow inherits Rectangle {
+    in property <BatchRowData> entry;
+
+    height: 36px;
+    background: Theme.raised;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+
+            Text {
+                text: root.entry.name + "  ·  " + root.entry.range;
+                color: Theme.fg;
+                font-size: Theme.fs;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.entry.file;
+                color: Theme.fg-dim;
+                font-family: Theme.font-technical;
+                font-size: Theme.fs-sm;
+                overflow: elide;
+            }
+        }
+
+        Text {
+            text: root.entry.state;
+            color: root.entry.state == "done" ? Theme.green
+                : root.entry.state == "failed" ? Theme.danger
+                : Theme.fg-muted;
+            font-size: Theme.fs-sm;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component BatchDialog inherits Modal {
+    in property <BatchData> data;
+    in property <[BatchRowData]> rows;
+
+    callback browse();
+    callback template-edited(text: string);
+    callback quality-changed(index: int);
+    callback collision-changed(index: int);
+    callback head-changed(value: float);
+    callback tail-changed(value: float);
+    callback start();
+    callback cancel();
+
+    open: root.data.open;
+    title: "Export in batch";
+    glyph: Glyph.export;
+    surface-width: 520px;
+    dismissable: !root.data.running;
+    note: root.data.summary;
+
+    VerticalLayout {
+        if !root.data.running: DialogSection {
+            first: true;
+            title: "Files";
+
+            DialogRow {
+                Field {
+                    value: root.data.folder;
+                    technical: true;
+                    placeholder: "Choose a folder";
+                }
+
+                Button {
+                    label: "Browse";
+                    glyph: Glyph.import;
+                    clicked => { root.browse(); }
+                }
+            }
+
+            DialogRow {
+                label: "Name";
+                Field {
+                    value: root.data.template;
+                    technical: true;
+                    edited(text) => { root.template-edited(text); }
+                }
+            }
+
+            DialogRow {
+                label: "If it exists";
+                Select {
+                    current: root.data.collision;
+                    options: ["Stop", "Skip it", "Replace it", "Add a number"];
+                    changed(index) => { root.collision-changed(index); }
+                }
+            }
+        }
+
+        if !root.data.running: DialogSection {
+            title: "Each file";
+
+            DialogRow {
+                label: "Quality";
+                Select {
+                    current: root.data.quality;
+                    options: ["High", "Balanced", "Small"];
+                    changed(index) => { root.quality-changed(index); }
+                }
+            }
+
+            DialogRow {
+                label: "Lead in";
+                NumberField {
+                    value: root.data.head;
+                    minimum: 0;
+                    maximum: 30;
+                    step: 0.25;
+                    precision: 2;
+                    suffix: " s";
+                    changed(v) => { root.head-changed(v); }
+                }
+            }
+
+            DialogRow {
+                label: "Lead out";
+                NumberField {
+                    value: root.data.tail;
+                    minimum: 0;
+                    maximum: 30;
+                    step: 0.25;
+                    precision: 2;
+                    suffix: " s";
+                    changed(v) => { root.tail-changed(v); }
+                }
+            }
+        }
+
+        DialogSection {
+            title: root.data.running ? root.data.stage : "Plan";
+
+            if root.data.error != "": Text {
+                text: root.data.error;
+                color: Theme.danger;
+                font-size: Theme.fs-sm;
+                wrap: word-wrap;
+            }
+
+            Flickable {
+                height: Math.min(root.rows.length * 37px, 200px);
+                viewport-height: root.rows.length * 37px;
+
+                VerticalLayout {
+                    spacing: 1px;
+                    for entry in root.rows: PlanRow { entry: entry; }
+                }
+            }
+
+            if root.data.running: Progress { value: root.data.progress; }
+
+            HorizontalLayout {
+                if root.data.running: Button {
+                    label: "Cancel batch";
+                    glyph: Glyph.close;
+                    ghost: true;
+                    clicked => { root.cancel(); }
+                }
+
+                if !root.data.running: Button {
+                    block: true;
+                    primary: true;
+                    large: true;
+                    glyph: Glyph.export;
+                    label: root.rows.length == 1 ? "Export 1 file" : "Export \{root.rows.length} files";
+                    enabled: root.data.can-start;
+                    clicked => { root.start(); }
+                }
+            }
+        }
+    }
+}

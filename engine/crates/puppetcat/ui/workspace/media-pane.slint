@@ -1053,10 +1053,10 @@ export component MediaPane inherits Rectangle {
         { id: "fade-white", label: "Fade to White", enabled: true, glyph: Glyph.transition },
     ];
     property <[CatalogueItemData]> transitions-motion: [
-        { id: "wipe-left", label: "Wipe Left", enabled: false, glyph: Glyph.transition },
-        { id: "wipe-right", label: "Wipe Right", enabled: false, glyph: Glyph.transition },
-        { id: "push", label: "Push", enabled: false, glyph: Glyph.transition },
-        { id: "zoom", label: "Zoom", enabled: false, glyph: Glyph.transition },
+        { id: "wipe-left", label: "Wipe Left", enabled: true, glyph: Glyph.transition },
+        { id: "wipe-right", label: "Wipe Right", enabled: true, glyph: Glyph.transition },
+        { id: "push", label: "Push", enabled: true, glyph: Glyph.transition },
+        { id: "zoom", label: "Zoom", enabled: true, glyph: Glyph.transition },
     ];
 
     // The audio effects: the same ids and shelves as the inspector's Audio

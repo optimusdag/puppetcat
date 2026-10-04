@@ -97,6 +97,117 @@ pub struct Clip {
     pub animation: Option<Animation>,
     /// How the clip's colour meets what is beneath it.
     pub blend: Blend,
+    /// The geometry of a motion transition arriving at the clip's start.
+    pub motion_in: Option<Motion>,
+    /// The geometry of a motion transition leaving at the clip's end.
+    pub motion_out: Option<Motion>,
+}
+
+/// Which motion transition a [`Motion`] performs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MotionKind {
+    /// The incoming picture is uncovered by an edge sweeping leftwards.
+    WipeLeft,
+    /// The incoming picture is uncovered by an edge sweeping rightwards.
+    WipeRight,
+    /// The outgoing picture is pushed off to the left by the incoming one.
+    Push,
+    /// The outgoing picture zooms away while the incoming one zooms into
+    /// place; the opacity ramps that make it a dissolve are the clip's own.
+    Zoom,
+}
+
+impl MotionKind {
+    /// The kind a transition id names, `None` for the ones that are not
+    /// motion transitions.
+    pub fn parse(id: &str) -> Option<MotionKind> {
+        match id {
+            "wipe-left" => Some(MotionKind::WipeLeft),
+            "wipe-right" => Some(MotionKind::WipeRight),
+            "push" => Some(MotionKind::Push),
+            "zoom" => Some(MotionKind::Zoom),
+            _ => None,
+        }
+    }
+}
+
+/// A motion transition's stretch of one clip: the first `span` seconds of
+/// the incoming clip, or the last `span` seconds of the outgoing one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Motion {
+    /// What moves.
+    pub kind: MotionKind,
+    /// Timeline seconds the motion covers on this clip.
+    pub span: Rational,
+}
+
+/// What a motion transition does to one clip at one instant.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct MotionState {
+    /// Added to the clip's horizontal offset, as a frame-width fraction.
+    pub offset_x: f64,
+    /// Multiplies the clip's scale.
+    pub scale: f64,
+    /// The stretch of the output frame's width the clip may show, as
+    /// `(left, right)` fractions, or `None` for all of it.
+    pub reveal: Option<(f64, f64)>,
+}
+
+impl MotionState {
+    /// No motion: nothing moved, nothing hidden.
+    pub const REST: MotionState = MotionState {
+        offset_x: 0.0,
+        scale: 1.0,
+        reveal: None,
+    };
+
+    /// The state of the incoming clip when `p` of the motion has run.
+    fn entering(kind: MotionKind, p: f64) -> MotionState {
+        use crate::animate::Ease;
+        match kind {
+            MotionKind::WipeLeft => MotionState {
+                reveal: Some((1.0 - p, 1.0)),
+                ..Self::REST
+            },
+            MotionKind::WipeRight => MotionState {
+                reveal: Some((0.0, p)),
+                ..Self::REST
+            },
+            MotionKind::Push => MotionState {
+                offset_x: 1.0 - Ease::InOut.apply(p),
+                ..Self::REST
+            },
+            MotionKind::Zoom => MotionState {
+                scale: 0.5 + 0.5 * Ease::Out.apply(p),
+                ..Self::REST
+            },
+        }
+    }
+
+    /// The state of the outgoing clip when `p` of the motion has run. A
+    /// wipe hides exactly what the incoming clip's wipe shows, so a clip
+    /// leaving over empty ground wipes away rather than popping out.
+    fn leaving(kind: MotionKind, p: f64) -> MotionState {
+        use crate::animate::Ease;
+        match kind {
+            MotionKind::WipeLeft => MotionState {
+                reveal: Some((0.0, 1.0 - p)),
+                ..Self::REST
+            },
+            MotionKind::WipeRight => MotionState {
+                reveal: Some((p, 1.0)),
+                ..Self::REST
+            },
+            MotionKind::Push => MotionState {
+                offset_x: -Ease::InOut.apply(p),
+                ..Self::REST
+            },
+            MotionKind::Zoom => MotionState {
+                scale: 1.0 + Ease::In.apply(p),
+                ..Self::REST
+            },
+        }
+    }
 }
 
 /// How a layer's colour meets what is beneath it.
@@ -212,7 +323,37 @@ impl Clip {
             reverse: false,
             animation: None,
             blend: Blend::Normal,
+            motion_in: None,
+            motion_out: None,
         }
+    }
+
+    /// What the clip's motion transitions do to it at `time`.
+    pub fn motion_at(&self, time: Rational) -> MotionState {
+        let local = time - self.start;
+        let mut state = MotionState::REST;
+        if let Some(motion) = self.motion_in.filter(|m| !m.span.is_zero())
+            && local < motion.span
+        {
+            let p = (local / motion.span).as_f64().clamp(0.0, 1.0);
+            state = MotionState::entering(motion.kind, p);
+        }
+        if let Some(motion) = self.motion_out.filter(|m| !m.span.is_zero())
+            && self.duration - local < motion.span
+        {
+            let remaining = self.duration - local;
+            let p = (1.0 - (remaining / motion.span).as_f64()).clamp(0.0, 1.0);
+            let out = MotionState::leaving(motion.kind, p);
+            state = MotionState {
+                offset_x: state.offset_x + out.offset_x,
+                scale: state.scale * out.scale,
+                reveal: match (state.reveal, out.reveal) {
+                    (Some((a, b)), Some((c, d))) => Some((a.max(c), b.min(d))),
+                    (a, b) => a.or(b),
+                },
+            };
+        }
+        state
     }
 
     /// Where in the clip `time` falls, `0..=1`; zero outside it.
@@ -642,6 +783,48 @@ mod tests {
         let clip = timeline.clip(id).expect("clip exists");
         assert_eq!(clip.video_fade_factor(seconds(2)), 1.0);
         assert_eq!(clip.video_fade_factor(seconds(4)), 1.0);
+    }
+
+    #[test]
+    fn motion_runs_over_the_clips_edges_and_rests_between() {
+        let mut clip = Clip::new(MediaRef::new("a.mp4"), seconds(10), seconds(4));
+        clip.motion_in = Some(Motion {
+            kind: MotionKind::Push,
+            span: seconds(1),
+        });
+        clip.motion_out = Some(Motion {
+            kind: MotionKind::Push,
+            span: seconds(1),
+        });
+        // Arrives from a full frame to the right...
+        assert_eq!(clip.motion_at(seconds(10)).offset_x, 1.0);
+        assert_eq!(clip.motion_at(Rational::new(21, 2)).offset_x, 0.5);
+        // ...rests in the middle...
+        assert_eq!(clip.motion_at(seconds(12)), MotionState::REST);
+        // ...and leaves a full frame to the left.
+        assert_eq!(clip.motion_at(Rational::new(27, 2)).offset_x, -0.5);
+        assert_eq!(clip.motion_at(seconds(14)).offset_x, -1.0);
+    }
+
+    #[test]
+    fn a_wipe_in_and_the_wipe_out_beside_it_cover_the_frame_exactly() {
+        let mut incoming = Clip::new(MediaRef::new("b.mp4"), seconds(2), seconds(4));
+        incoming.motion_in = Some(Motion {
+            kind: MotionKind::WipeLeft,
+            span: seconds(2),
+        });
+        let mut outgoing = Clip::new(MediaRef::new("a.mp4"), seconds(0), seconds(4));
+        outgoing.motion_out = Some(Motion {
+            kind: MotionKind::WipeLeft,
+            span: seconds(2),
+        });
+        // Outgoing's last two seconds are the incoming's first two: at the
+        // quarter point the edge sits three quarters across.
+        let t = Rational::new(5, 2);
+        let new = incoming.motion_at(t).reveal.expect("wiping");
+        let old = outgoing.motion_at(t).reveal;
+        assert_eq!(new, (0.75, 1.0));
+        assert_eq!(old, Some((0.0, 0.75)), "the old picture keeps the rest");
     }
 
     #[test]

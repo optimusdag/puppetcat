@@ -38,6 +38,9 @@ pub struct PlannedLayer {
     pub paced: bool,
     /// How the layer's colour meets what is beneath it.
     pub blend: puppetcat_core::timeline::Blend,
+    /// The stretch of the frame's width a motion transition lets this layer
+    /// show, as `(left, right)` fractions; `None` for all of it.
+    pub reveal: Option<(f64, f64)>,
 }
 
 /// Everything needed to draw one output frame.
@@ -82,6 +85,11 @@ pub fn plan_frame(timeline: &Timeline, time: Rational) -> FramePlan {
             continue;
         };
 
+        let motion = clip.motion_at(time);
+        let mut transform = clip.transform_at(time);
+        transform.offset_x += motion.offset_x;
+        transform.scale *= motion.scale;
+
         layers.push(PlannedLayer {
             clip: clip_id,
             media: clip.media.path.clone(),
@@ -90,9 +98,10 @@ pub fn plan_frame(timeline: &Timeline, time: Rational) -> FramePlan {
             // The fade ramp multiplies in here, so the compositor only ever
             // sees a per-frame opacity - it has no idea fades exist.
             opacity: (clip.opacity_at(time) * clip.video_fade_factor(time)).clamp(0.0, 1.0),
-            transform: clip.transform_at(time),
+            transform,
             paced: clip.is_paced(),
             blend: clip.blend,
+            reveal: motion.reveal,
         });
     }
 

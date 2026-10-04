@@ -32,7 +32,9 @@ use puppetcat_core::animate::Animation;
 use puppetcat_core::frame::Frame;
 use puppetcat_core::shader::ShaderPass;
 use puppetcat_core::time::{FrameRate, Rational};
-use puppetcat_core::timeline::{Clip, ClipId, MediaRef, Timeline, Track, TrackKind, Transform};
+use puppetcat_core::timeline::{
+    Clip, ClipId, MediaRef, Motion, MotionKind, Timeline, Track, TrackKind, Transform,
+};
 use puppetcat_effects::Catalogue;
 use puppetcat_media::audio::{self, AudioClip};
 use puppetcat_media::{DecodeOptions, Decoder, EncodeOptions, Encoder, FrameSink, FrameSource};
@@ -169,6 +171,13 @@ pub struct ExportClip {
     /// as `video_fade_in`.
     #[serde(default)]
     pub video_fade_out: f64,
+    /// A motion transition arriving at the clip's start: what moves, and
+    /// for how many seconds. Set by transition resolution, never by the UI.
+    #[serde(skip)]
+    pub motion_in: Option<(MotionKind, f64)>,
+    /// A motion transition leaving at the clip's end; see `motion_in`.
+    #[serde(skip)]
+    pub motion_out: Option<(MotionKind, f64)>,
     /// The source's pixel width, when the UI knows it. What makes an
     /// aspect-correct decode possible - absent, the frame is filled edge to
     /// edge the way it always was.
@@ -204,7 +213,8 @@ pub struct ExportKey {
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TransitionSpec {
-    /// "cross-fade", "fade-black" or "fade-white". Anything else is ignored.
+    /// "cross-fade", "fade-black", "fade-white", "wipe-left", "wipe-right",
+    /// "push" or "zoom". Anything else is ignored.
     pub kind: String,
     /// Seconds the transition covers.
     pub duration: f64,
@@ -304,12 +314,6 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
     let fps = rate.fps().as_f64();
     let frame = 1.0 / fps;
 
-    struct Cut {
-        incoming: usize,
-        outgoing: usize,
-        kind: String,
-        duration: f64,
-    }
     let mut cuts: Vec<Cut> = Vec::new();
     for (incoming, clip) in clips.iter().enumerate() {
         let Some(transition) = &clip.transition else {
@@ -341,79 +345,64 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
     for cut in cuts {
         match cut.kind.as_str() {
             "cross-fade" => {
-                let (a_track, a_duration, a_path, a_source_end) = {
-                    let a = &clips[cut.outgoing];
-                    (
-                        a.track,
-                        a.duration,
-                        a.path.clone(),
-                        a.source_start + a.duration * a.speed,
-                    )
+                match borrow_handle(clips, cut.outgoing, cut.incoming, cut.duration, frame) {
+                    Handle::Overlap(d) => clips[cut.incoming].video_fade_in = d,
+                    Handle::Short => {}
+                    Handle::Missing => {
+                        // No handle to borrow without surfacing the cut: dip
+                        // through black instead, using only footage each clip
+                        // already shows - the outgoing clip's real tail
+                        // opacity-ramping out, the incoming clip's real head
+                        // ramping in. An opacity ramp, not a baked filter, so
+                        // the paused monitor and the live scrub see the same
+                        // dissolve the export does - nothing here needs FFmpeg
+                        // to be running.
+                        let Some(half) = dip_half(clips, &cut, frame) else {
+                            continue;
+                        };
+                        clips[cut.outgoing].video_fade_out = half.min(clips[cut.outgoing].duration);
+                        clips[cut.incoming].video_fade_in = half.min(clips[cut.incoming].duration);
+                    }
+                }
+            }
+            kind if MotionKind::parse(kind).is_some() => {
+                let Some(motion) = MotionKind::parse(kind) else {
+                    continue;
                 };
-
-                // Borrowing a handle - source the incoming clip has *before*
-                // its in-point - is only honest when that source is already
-                // covered by the outgoing clip: the same media, with nothing
-                // missing between where it leaves off and where the incoming
-                // clip picks up. Then the dissolve reveals nothing the
-                // timeline isn't already showing (touching exactly, or even
-                // overlapping, is fine - only a real gap is not). A still
-                // has no such concept - the same frame is available
-                // regardless - so it always qualifies. The moment there's an
-                // actual cut between them (a gap in source time, or
-                // different media entirely), the "handle" would be exactly
-                // the footage that edit removed, so there is none to borrow.
-                let has_handle = {
-                    let b = &clips[cut.incoming];
-                    b.kind == ClipKind::Image
-                        || (a_path == b.path && b.source_start - a_source_end < frame / 2.0)
-                };
-
-                if has_handle {
-                    let b = &mut clips[cut.incoming];
-                    // No handle, shorter dissolve: the duration clamps to
-                    // what actually exists rather than freezing or inventing
-                    // frames.
-                    let mut d = cut.duration.min(a_duration).min(b.duration);
-                    if b.kind != ClipKind::Image {
-                        d = d.min(b.source_start / b.speed.max(0.0625));
-                    }
-                    if d < frame {
-                        continue;
-                    }
-                    b.start -= d;
-                    b.duration += d;
-                    if b.kind != ClipKind::Image {
-                        b.source_start -= d * b.speed;
-                    }
-                    b.video_fade_in = d;
-                    // Sound rides the picture: the pre-roll fades in rather
-                    // than arriving at full level a dissolve early.
-                    b.fade_in = b.fade_in.max(d);
-                    b.track = a_track + 1;
-                } else {
-                    // No handle to borrow without surfacing the cut: dip
-                    // through black instead, using only footage each clip
-                    // already shows - the outgoing clip's real tail opacity-
-                    // ramping out, the incoming clip's real head ramping in.
-                    // An opacity ramp, not a baked filter, so the paused
-                    // monitor and the live scrub see the same dissolve the
-                    // export does - nothing here needs FFmpeg to be running.
-                    let half = cut
-                        .duration
-                        .min(a_duration)
-                        .min(clips[cut.incoming].duration)
-                        / 2.0;
-                    if half < frame {
-                        continue;
-                    }
-                    {
-                        let a = &mut clips[cut.outgoing];
-                        a.video_fade_out = half.min(a.duration);
-                    }
-                    {
+                // A zoom is a dissolve with a scale on it; a wipe or a push
+                // is all geometry, and shows both pictures at full strength.
+                let dissolves = motion == MotionKind::Zoom;
+                match borrow_handle(clips, cut.outgoing, cut.incoming, cut.duration, frame) {
+                    Handle::Overlap(d) => {
+                        clips[cut.outgoing].motion_out = Some((motion, d));
                         let b = &mut clips[cut.incoming];
-                        b.video_fade_in = half.min(b.duration);
+                        b.motion_in = Some((motion, d));
+                        if dissolves {
+                            b.video_fade_in = d;
+                        }
+                    }
+                    Handle::Short => {}
+                    Handle::Missing => {
+                        // The same dip as the cross-fade's: each clip moves
+                        // through its own half, over black, because there is
+                        // no footage to hold both pictures at once.
+                        let Some(half) = dip_half(clips, &cut, frame) else {
+                            continue;
+                        };
+                        {
+                            let a = &mut clips[cut.outgoing];
+                            a.motion_out = Some((motion, half.min(a.duration)));
+                            if dissolves {
+                                a.video_fade_out = half.min(a.duration);
+                            }
+                        }
+                        {
+                            let b = &mut clips[cut.incoming];
+                            b.motion_in = Some((motion, half.min(b.duration)));
+                            if dissolves {
+                                b.video_fade_in = half.min(b.duration);
+                            }
+                        }
                     }
                 }
             }
@@ -455,6 +444,92 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
             _ => {}
         }
     }
+}
+
+/// What borrowing a handle for a transition came to.
+enum Handle {
+    /// The incoming clip now starts this many seconds early, on the lane
+    /// above, overlapping the outgoing one's tail.
+    Overlap(f64),
+    /// There is a handle but too little of it to span a frame.
+    Short,
+    /// No handle: the cut is a real edit, and there is nothing to borrow.
+    Missing,
+}
+
+/// Extends the incoming clip backwards over the outgoing one's tail, when
+/// that reveals nothing the timeline is not already showing.
+///
+/// Borrowing a handle - source the incoming clip has *before* its in-point -
+/// is only honest when that source is already covered by the outgoing clip:
+/// the same media, with nothing missing between where it leaves off and where
+/// the incoming clip picks up. Then the transition reveals nothing the
+/// timeline isn't already showing (touching exactly, or even overlapping, is
+/// fine - only a real gap is not). A still has no such concept - the same
+/// frame is available regardless - so it always qualifies. The moment there's
+/// an actual cut between them (a gap in source time, or different media
+/// entirely), the "handle" would be exactly the footage that edit removed, so
+/// there is none to borrow.
+fn borrow_handle(
+    clips: &mut [ExportClip],
+    outgoing: usize,
+    incoming: usize,
+    duration: f64,
+    frame: f64,
+) -> Handle {
+    let (a_track, a_duration, a_path, a_source_end) = {
+        let a = &clips[outgoing];
+        (
+            a.track,
+            a.duration,
+            a.path.clone(),
+            a.source_start + a.duration * a.speed,
+        )
+    };
+    let b = &mut clips[incoming];
+    let has_handle = b.kind == ClipKind::Image
+        || (a_path == b.path && b.source_start - a_source_end < frame / 2.0);
+    if !has_handle {
+        return Handle::Missing;
+    }
+    // No handle, shorter transition: the duration clamps to what actually
+    // exists rather than freezing or inventing frames.
+    let mut d = duration.min(a_duration).min(b.duration);
+    if b.kind != ClipKind::Image {
+        d = d.min(b.source_start / b.speed.max(0.0625));
+    }
+    if d < frame {
+        return Handle::Short;
+    }
+    b.start -= d;
+    b.duration += d;
+    if b.kind != ClipKind::Image {
+        b.source_start -= d * b.speed;
+    }
+    // Sound rides the picture: the pre-roll fades in rather than arriving at
+    // full level a transition early.
+    b.fade_in = b.fade_in.max(d);
+    b.track = a_track + 1;
+    Handle::Overlap(d)
+}
+
+/// Half the span each clip gets when a transition dips instead of
+/// overlapping, or `None` when that is under a frame.
+fn dip_half(clips: &[ExportClip], cut: &Cut, frame: f64) -> Option<f64> {
+    let half = cut
+        .duration
+        .min(clips[cut.outgoing].duration)
+        .min(clips[cut.incoming].duration)
+        / 2.0;
+    (half >= frame).then_some(half)
+}
+
+/// One cut with a transition on it, found before anything is mutated.
+struct Cut {
+    incoming: usize,
+    outgoing: usize,
+    kind: String,
+    duration: f64,
 }
 
 /// Appends one filter to a chain, comma-separated. Effects the user stacked
@@ -761,6 +836,35 @@ struct Source<F> {
     passes: Vec<ShaderPass>,
 }
 
+/// Hides every column of `frame` that a motion transition's wipe has not
+/// uncovered. `reveal` is the visible stretch of the *output* frame's width as
+/// `(left, right)` fractions; the picture sits centred in that frame, so its
+/// own columns are found by shifting. Hidden columns become transparent,
+/// which both compositors already draw as nothing, so a wipe needs no
+/// compositor of its own. It is measured against the fitted picture, before
+/// the clip's own scale and offset - a clip with its own placement wipes
+/// along the frame's axis only approximately.
+fn revealed(mut frame: Frame, reveal: Option<(f64, f64)>, output_width: u32) -> Frame {
+    let Some((left, right)) = reveal else {
+        return frame;
+    };
+    let width = frame.width() as usize;
+    let origin = (f64::from(output_width) - width as f64) / 2.0;
+    let column = |fraction: f64| {
+        (fraction * f64::from(output_width) - origin)
+            .round()
+            .clamp(0.0, width as f64) as usize
+    };
+    let from = column(left);
+    let to = column(right);
+    let to = to.max(from);
+    for row in frame.pixels_mut().chunks_exact_mut(width * 4) {
+        row[..from * 4].fill(0);
+        row[to * 4..].fill(0);
+    }
+    frame
+}
+
 /// The fraction-to-pixel placement of one composited layer: fitted and
 /// centred is the base, the clip's transform moves it from there. The one
 /// definition the exporter and the preview share - these two paths must
@@ -874,7 +978,7 @@ fn render_picture(
                     pre,
                 ) {
                     sources.push(Source {
-                        frame: frame.as_ref().clone(),
+                        frame: revealed(frame.as_ref().clone(), layer.reveal, request.width),
                         opacity: layer.opacity,
                         transform: layer.transform,
                         track: tracks.get(&layer.clip).copied().unwrap_or(0),
@@ -959,7 +1063,7 @@ fn render_picture(
             // mistake in the edit, not a failure of the renderer.
             if let Some(frame) = decoder.next_frame().map_err(|error| error.to_string())? {
                 sources.push(Source {
-                    frame,
+                    frame: revealed(frame, layer.reveal, request.width),
                     opacity: layer.opacity,
                     transform: layer.transform,
                     track: tracks.get(&layer.clip).copied().unwrap_or(0),
@@ -1228,6 +1332,14 @@ fn build_timeline(
         // frame grid the overlap does, or the dissolve ends a frame early.
         engine_clip.video_fade_in = quantise(clip.video_fade_in, rate);
         engine_clip.video_fade_out = quantise(clip.video_fade_out, rate);
+        engine_clip.motion_in = clip.motion_in.map(|(kind, span)| Motion {
+            kind,
+            span: quantise(span, rate),
+        });
+        engine_clip.motion_out = clip.motion_out.map(|(kind, span)| Motion {
+            kind,
+            span: quantise(span, rate),
+        });
 
         if let Some(id) = timeline.add_clip(tracks[clip.track], engine_clip) {
             tracks_of.insert(id, clip.track);
@@ -1554,7 +1666,14 @@ pub fn preview_sources(
             pre,
         ) {
             Ok(frame) => sources.push(Source {
-                frame,
+                frame: match layer.reveal {
+                    Some(_) => std::sync::Arc::new(revealed(
+                        frame.as_ref().clone(),
+                        layer.reveal,
+                        plan.width,
+                    )),
+                    None => frame,
+                },
                 opacity: layer.opacity,
                 transform: layer.transform,
                 track: tracks.get(&layer.clip).copied().unwrap_or(0),
@@ -1778,6 +1897,8 @@ mod tests {
             transition: None,
             video_fade_in: 0.0,
             video_fade_out: 0.0,
+            motion_in: None,
+            motion_out: None,
             media_width: None,
             media_height: None,
             has_audio: None,
@@ -2592,9 +2713,73 @@ mod tests {
             clip("video", 0, 0.0, 2.0, 0.0),
             clip("video", 0, 2.0, 2.0, 0.0),
         ];
-        clips[1].transition = spec("wipe-left", 1.0);
+        clips[1].transition = spec("spiral", 1.0);
         resolve_transitions(&mut clips, FrameRate::THIRTY, true);
         assert_eq!(clips[1].start, 2.0);
         assert!(clips[1].video_filter_chain.is_empty());
+        assert!(clips[1].motion_in.is_none());
+    }
+
+    #[test]
+    fn a_motion_transition_with_a_handle_overlaps_and_moves_both_clips() {
+        for (id, kind) in [
+            ("wipe-left", MotionKind::WipeLeft),
+            ("wipe-right", MotionKind::WipeRight),
+            ("push", MotionKind::Push),
+            ("zoom", MotionKind::Zoom),
+        ] {
+            // Continuous footage: the incoming clip has two seconds of
+            // source before its in-point, all of it already on the timeline.
+            let mut clips = vec![
+                clip("video", 0, 0.0, 2.0, 0.0),
+                clip("video", 0, 2.0, 2.0, 2.0),
+            ];
+            clips[1].transition = spec(id, 1.0);
+            resolve_transitions(&mut clips, FrameRate::THIRTY, false);
+            assert_eq!(clips[1].start, 1.0, "{id}: starts a second early");
+            assert_eq!(clips[1].track, 1, "{id}: on the lane above");
+            assert_eq!(clips[1].motion_in, Some((kind, 1.0)), "{id}");
+            assert_eq!(clips[0].motion_out, Some((kind, 1.0)), "{id}");
+            // Only a zoom is also a dissolve.
+            let dissolves = if kind == MotionKind::Zoom { 1.0 } else { 0.0 };
+            assert_eq!(clips[1].video_fade_in, dissolves, "{id}");
+            assert_eq!(clips[0].video_fade_out, 0.0, "{id}");
+        }
+    }
+
+    #[test]
+    fn a_motion_transition_without_a_handle_moves_each_clip_through_its_half() {
+        let mut clips = vec![
+            clip("video", 0, 0.0, 2.0, 0.0),
+            clip("video", 0, 2.0, 2.0, 0.0),
+        ];
+        clips[1].path = "other.mp4".to_owned();
+        clips[1].transition = spec("push", 1.0);
+        resolve_transitions(&mut clips, FrameRate::THIRTY, false);
+        assert_eq!(clips[1].start, 2.0, "the cut is not moved");
+        assert_eq!(clips[0].motion_out, Some((MotionKind::Push, 0.5)));
+        assert_eq!(clips[1].motion_in, Some((MotionKind::Push, 0.5)));
+    }
+
+    #[test]
+    fn a_wipe_hides_the_columns_it_has_not_uncovered() {
+        let mut frame = Frame::black(10, 2);
+        frame.fill([200, 100, 50, 255]);
+        let shown = revealed(frame.clone(), Some((0.3, 0.7)), 10);
+        for x in 0..10 {
+            let alpha = shown.pixel(x, 1).expect("in range")[3];
+            assert_eq!(alpha == 255, (3..7).contains(&x), "column {x}");
+        }
+        assert!(revealed(frame.clone(), None, 10) == frame);
+
+        // A picture narrower than the frame is centred in it: a 4-wide
+        // picture in a 10-wide frame spans frame columns 3..7.
+        let mut narrow = Frame::black(4, 1);
+        narrow.fill([1, 2, 3, 255]);
+        let shown = revealed(narrow, Some((0.5, 1.0)), 10);
+        let visible: Vec<u32> = (0..4)
+            .filter(|x| shown.pixel(*x, 0).expect("in range")[3] == 255)
+            .collect();
+        assert_eq!(visible, vec![2, 3], "frame columns 5..7 are picture 2..4");
     }
 }

@@ -130,6 +130,8 @@ impl Titles {
                     transition: None,
                     video_fade_in: 0.0,
                     video_fade_out: 0.0,
+                    motion_in: None,
+                    motion_out: None,
                     media_width: Some(width),
                     media_height: Some(height),
                     has_audio: Some(false),

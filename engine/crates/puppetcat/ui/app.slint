@@ -24,6 +24,7 @@ import { MediaFilter, MediaItemData, MediaKind } from "workspace/media-pane.slin
 import { ContextMenu, MenuItemData, MenuRow } from "primitives/context-menu.slint";
 import { Modal } from "primitives/modal.slint";
 import { ExportData, ExportDialog, ExportPhase } from "dialogs/export.slint";
+import { SilenceData, SilenceDialog, SilencePhase } from "dialogs/silence.slint";
 import { ModelData, SettingsData, SettingsDialog, SystemFactData } from "dialogs/settings.slint";
 import { DockDivider, DockSide, SeatBox } from "dock.slint";
 import { Editor } from "editor.slint";
@@ -51,7 +52,7 @@ export {
     EffectData, MediaFilter, MediaItemData, MediaKind,
     ClipData, ClipField, ClipKind, ClipTextField, DropData, SelectedClipData,
     StageGuideData, StageItemData, TextAlignment, TimelineTabData, TimelineTool,
-    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, ModelData, SettingsData,
+    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, SilenceData, SilencePhase, ModelData, SettingsData,
     RecentProjectData, StartData, SystemFactData, ToastData,
 }
 
@@ -134,6 +135,12 @@ export component App inherits Window {
     // modal has to be declared where it is drawn, and it is drawn over
     // everything.
     in property <ExportData> export;
+    in property <SilenceData> silence;
+    callback silence-closed();
+    callback silence-threshold-changed(value: float);
+    callback silence-min-changed(value: float);
+    callback silence-padding-changed(value: float);
+    callback silence-apply();
     in property <SettingsData> settings;
     in property <[ModelData]> transcribers;
     in property <[ModelData]> voices;
@@ -334,6 +341,20 @@ callback export-closed();
         cancel => { root.export-cancel(); }
         reveal => { root.export-reveal(); }
         again => { root.export-again(); }
+    }
+
+    SilenceDialog {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        data: root.silence;
+
+        closed => { root.silence-closed(); }
+        threshold-changed(value) => { root.silence-threshold-changed(value); }
+        min-silence-changed(value) => { root.silence-min-changed(value); }
+        padding-changed(value) => { root.silence-padding-changed(value); }
+        apply => { root.silence-apply(); }
     }
 
     SettingsDialog {

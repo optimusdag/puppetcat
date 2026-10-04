@@ -44,6 +44,8 @@ export component TimelinePane inherits Rectangle {
     callback split();
     callback merge();
     callback delete-selected();
+    callback delete-range();
+    callback remove-silence();
     callback av-tools();
 
     in property <[MenuItemData]> av-items;
@@ -211,6 +213,7 @@ export component TimelinePane inherits Rectangle {
             selected-count: root.selected-count;
             merge-blocked-because: root.merge-blocked-because;
             has-av-tools: root.has-av-tools;
+            has-range: root.range-start >= 0 && root.range-end > root.range-start;
             readout: Fmt.frames-timecode(root.playhead, root.frame-rate);
 
             tool-changed(tool) => { root.tool-changed(tool); }
@@ -218,6 +221,8 @@ export component TimelinePane inherits Rectangle {
             split => { root.split(); }
             merge => { root.merge(); }
             delete-selected => { root.delete-selected(); }
+            delete-range => { root.delete-range(); }
+            remove-silence => { root.remove-silence(); }
             av-tools(at-x) => {
                 root.asked-av = true;
                 av.request-x = at-x;

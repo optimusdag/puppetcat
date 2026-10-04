@@ -45,6 +45,9 @@ use crate::host::{Host, MediaArt, image_at, image_of, media_art, on_ui, spawn};
 use crate::prefs::Preferences;
 use crate::ui::*;
 
+mod cleanup;
+pub use cleanup::{SilenceScope, SilenceState};
+
 /// The monitor's output sizes, matching the picker's rows.
 pub const OUTPUTS: [(i32, i32); 6] = [
     (1920, 1080),
@@ -631,6 +634,7 @@ pub struct Studio {
 
     // ── the sheets and menus ──
     pub export: ExportState,
+    pub silence: SilenceState,
     /// The timeline range selection, Shift-dragged on the ruler: seconds
     /// `(start, end)`, what an export of "the selection" covers.
     pub range: Option<(f64, f64)>,
@@ -1023,6 +1027,7 @@ impl Studio {
             preview_wanted: false,
             preview_failed: false,
             export: ExportState::default(),
+            silence: SilenceState::default(),
             range: None,
             settings: SettingsState::default(),
             transcribers: Vec::new(),
@@ -4604,6 +4609,7 @@ impl Studio {
         editor.set_timeline_menu_token(self.timeline_menu_token);
 
         app.set_export(self.export_data());
+        app.set_silence(self.silence_data());
         sync(
             &models.export_sizes,
             (0..4)
@@ -4843,6 +4849,21 @@ impl Studio {
                 clip.start <= playhead && playhead <= clip.start + clip.duration,
             ),
             rule(),
+            action(
+                "clip-scenes",
+                "Detect scenes (mark the cuts)".into(),
+                Glyph::Flag,
+                "",
+                clip.kind == model::ClipKind::Video,
+            ),
+            action(
+                "clip-silence",
+                "Remove silence in clip…".into(),
+                Glyph::Silence,
+                "",
+                clip.kind != model::ClipKind::Image,
+            ),
+            rule(),
         ];
         let audible = clip.kind != model::ClipKind::Image;
         rows.push(check(
@@ -4948,11 +4969,22 @@ impl Studio {
             "Add timeline marker at playhead",
             Glyph::Plus,
         )];
+        rows.push(row("timeline-silence", "Remove silence…", Glyph::Silence));
         if self.range.is_some() {
             rows.push(MenuItemData {
                 kind: MenuRow::Separator,
                 ..Default::default()
             });
+            rows.push(row(
+                "range-delete",
+                "Delete range and close the gap",
+                Glyph::RangeCut,
+            ));
+            rows.push(row(
+                "range-silence",
+                "Remove silence in range…",
+                Glyph::Silence,
+            ));
             rows.push(row("range-export", "Export selected range…", Glyph::Export));
             rows.push(row("range-clear", "Clear range selection", Glyph::Close));
         }

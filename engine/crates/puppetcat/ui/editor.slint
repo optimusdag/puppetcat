@@ -207,6 +207,8 @@ export global Editor {
     callback split();
     callback merge();
     callback delete-selected();
+    callback delete-range();
+    callback remove-silence();
     callback av-tools();
     in-out property <[MenuItemData]> av-items;
     in-out property <length> av-height;

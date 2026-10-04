@@ -98,6 +98,9 @@ export enum Glyph {
     skip-back,
     skip-forward,
     text-mark,
+    // cutting time out
+    range-cut,
+    silence,
     // the start screen
     info,
     folder,
@@ -457,6 +460,18 @@ export component Icon inherits Rectangle {
     if root.glyph == Glyph.flag: Stroked {
         size: root.size; tint: root.tint; weight: root.weight;
         commands: "M4 22V4 M4 15s1-1 4-1 5 2 8 2V3s-1 1-4 1-5-2-8-2Z";
+    }
+
+    // Two brackets around a cross: the span between them, struck out.
+    if root.glyph == Glyph.range-cut: Stroked {
+        size: root.size; tint: root.tint; weight: root.weight;
+        commands: "M5 4H3v16h2 M19 4h2v16h-2 M9.5 9.5l5 5 M14.5 9.5l-5 5";
+    }
+
+    // Sound either side of a flat line: the quiet in between.
+    if root.glyph == Glyph.silence: Stroked {
+        size: root.size; tint: root.tint; weight: root.weight;
+        commands: "M2 10.5v3 M6 7v10 M18 7v10 M22 10.5v3 M9.5 12h5";
     }
 
     // lucide/type

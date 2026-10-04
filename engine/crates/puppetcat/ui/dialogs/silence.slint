@@ -1,0 +1,173 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 PuppetCat contributors
+
+import { Theme } from "../theme/theme.slint";
+import { Glyph } from "../icons.slint";
+import { Button, DialogSection, Modal } from "../primitives/modal.slint";
+import { Fader } from "../inspector/controls.slint";
+
+// The remove-silence sheet.
+//
+// Three numbers decide what counts as dead air, and the answer to "what will
+// this do" is on the sheet before anything is cut: how many silences, how
+// many seconds. Moving a slider re-runs the analysis, so the readout is
+// always the result of what the sliders say now.
+
+export enum SilencePhase { analysing, ready, failed }
+
+export struct SilenceData {
+    open: bool,
+    /// What the pass looks at: "Whole timeline", "Selected range", a clip name
+    scope: string,
+    /// Audio at or below this level is silence, in dBFS
+    threshold: float,
+    /// Silences shorter than this are left alone, in seconds
+    min-silence: float,
+    /// Seconds of silence kept at each side of a cut
+    padding: float,
+    phase: SilencePhase,
+    /// "7 silences · 12.4 s will be removed"
+    summary: string,
+    /// why it failed, or a caveat from the analysis
+    message: string,
+    /// how many cuts it would make; zero leaves Apply off
+    count: int,
+    /// the three settings in words, formatted by the caller
+    threshold-text: string,
+    min-silence-text: string,
+    padding-text: string,
+}
+
+// One slider with its name and its value in words.
+component Setting inherits VerticalLayout {
+    in property <string> label;
+    in property <string> readout;
+    in-out property <float> value;
+    in property <float> minimum;
+    in property <float> maximum;
+    in property <float> step;
+    in property <float> default-value;
+
+    callback changed(value: float);
+
+    spacing: 4px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+
+    HorizontalLayout {
+        Text {
+            text: root.label;
+            color: Theme.fg-muted;
+            font-size: Theme.fs;
+            vertical-alignment: center;
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        Text {
+            text: root.readout;
+            color: Theme.fg;
+            font-family: Theme.font-technical;
+            font-size: Theme.fs;
+            vertical-alignment: center;
+        }
+    }
+
+    Fader {
+        value <=> root.value;
+        minimum: root.minimum;
+        maximum: root.maximum;
+        step: root.step;
+        default-value: root.default-value;
+        changed(v) => { root.changed(v); }
+    }
+}
+
+export component SilenceDialog inherits Modal {
+    in property <SilenceData> data;
+
+    callback threshold-changed(value: float);
+    callback min-silence-changed(value: float);
+    callback padding-changed(value: float);
+    callback apply();
+
+    property <bool> analysing: root.data.phase == SilencePhase.analysing;
+
+    open: root.data.open;
+    title: "Remove silence";
+    glyph: Glyph.silence;
+    surface-width: 440px;
+    note: root.data.scope;
+
+    VerticalLayout {
+        DialogSection {
+            first: true;
+            title: "What counts as silence";
+
+            Setting {
+                label: "Threshold";
+                readout: root.data.threshold-text;
+                value: root.data.threshold;
+                minimum: -70;
+                maximum: -10;
+                step: 1;
+                default-value: -35;
+                changed(v) => { root.threshold-changed(v); }
+            }
+
+            Setting {
+                label: "Shortest silence";
+                readout: root.data.min-silence-text;
+                value: root.data.min-silence;
+                minimum: 0.1;
+                maximum: 3;
+                step: 0.05;
+                default-value: 0.5;
+                changed(v) => { root.min-silence-changed(v); }
+            }
+
+            Setting {
+                label: "Keep around speech";
+                readout: root.data.padding-text;
+                value: root.data.padding;
+                minimum: 0;
+                maximum: 0.5;
+                step: 0.01;
+                default-value: 0.1;
+                changed(v) => { root.padding-changed(v); }
+            }
+        }
+
+        DialogSection {
+            title: "Result";
+
+            Text {
+                text: root.analysing ? "Listening…" : root.data.summary;
+                color: root.data.phase == SilencePhase.failed ? Theme.danger : Theme.fg;
+                font-size: Theme.fs;
+                font-weight: Theme.weight-title;
+                wrap: word-wrap;
+            }
+
+            if root.data.message != "": Text {
+                text: root.data.message;
+                color: Theme.fg-dim;
+                font-size: Theme.fs-sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                Button {
+                    block: true;
+                    primary: true;
+                    large: true;
+                    glyph: Glyph.silence;
+                    label: root.data.count > 0 ? "Remove silence" : "Nothing to remove";
+                    enabled: !root.analysing && root.data.phase == SilencePhase.ready
+                        && root.data.count > 0;
+                    clicked => { root.apply(); }
+                }
+            }
+        }
+    }
+}

@@ -523,6 +523,18 @@ fn main() -> Result<(), slint::PlatformError> {
     editor.on_delete_selected(on_window!(|state| {
         state.delete_selected();
     }));
+    editor.on_delete_range(on_window!(|state| {
+        state.delete_range();
+    }));
+    // The toolbar's silence button works on the ruler selection when there is
+    // one, and on the whole timeline when there is not.
+    editor.on_remove_silence(on_window!(|state| {
+        let scope = match state.range {
+            Some((from, to)) => studio::SilenceScope::Range(from, to),
+            None => studio::SilenceScope::Timeline,
+        };
+        state.open_silence(scope);
+    }));
     editor.on_split(on_window!(|state| {
         let at = state.playhead;
         state.split_at(at, true);
@@ -593,6 +605,14 @@ fn main() -> Result<(), slint::PlatformError> {
     editor.on_timeline_menu_selected(on_window!(|state, action: SharedString| {
         if action.as_str() == "range-clear" {
             state.range = None;
+        } else if action.as_str() == "range-delete" {
+            state.delete_range();
+        } else if action.as_str() == "range-silence" {
+            if let Some((from, to)) = state.range {
+                state.open_silence(studio::SilenceScope::Range(from, to));
+            }
+        } else if action.as_str() == "timeline-silence" {
+            state.open_silence(studio::SilenceScope::Timeline);
         } else if action.as_str() == "range-export" {
             state.export.range_mode = 1;
             state.export.open = true;
@@ -862,6 +882,8 @@ fn main() -> Result<(), slint::PlatformError> {
                     },
                 });
             }
+            "clip-scenes" => state.detect_scenes(id),
+            "clip-silence" => state.open_silence(studio::SilenceScope::Clip(id)),
             "clip-marker" => {
                 let at = f64::from(state.playhead);
                 state.apply(puppetcat_project::Command::AddMarker {
@@ -903,6 +925,24 @@ fn main() -> Result<(), slint::PlatformError> {
     });
     app.on_export_closed(on_window!(|state| {
         state.export.open = false;
+    }));
+    app.on_silence_closed(on_window!(|state| {
+        state.close_silence();
+    }));
+    app.on_silence_threshold_changed(on_window!(|state, value: f32| {
+        state.silence.threshold = value;
+        state.silence_changed();
+    }));
+    app.on_silence_min_changed(on_window!(|state, value: f32| {
+        state.silence.min_silence = value;
+        state.silence_changed();
+    }));
+    app.on_silence_padding_changed(on_window!(|state, value: f32| {
+        state.silence.padding = value;
+        state.silence_changed();
+    }));
+    app.on_silence_apply(on_window!(|state| {
+        state.apply_silence();
     }));
     app.on_settings_closed(on_window!(|state| {
         state.settings.open = false;

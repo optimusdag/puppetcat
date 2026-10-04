@@ -275,6 +275,8 @@ export component Seat inherits Rectangle {
             split => { Editor.split(); }
             merge => { Editor.merge(); }
             delete-selected => { Editor.delete-selected(); }
+            delete-range => { Editor.delete-range(); }
+            remove-silence => { Editor.remove-silence(); }
             av-tools => { Editor.av-tools(); }
             av-items: Editor.av-items;
             av-height: Editor.av-height;

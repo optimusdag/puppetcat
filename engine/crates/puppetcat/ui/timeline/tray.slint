@@ -41,6 +41,8 @@ export component TimelineTray inherits Rectangle {
     in property <string> merge-blocked-because;
     /// The selected clip has sound to detach or words to speak.
     in property <bool> has-av-tools;
+    /// A span is selected on the ruler.
+    in property <bool> has-range;
     /// hh:mm:ss:ff at the playhead, formatted by the caller
     in property <string> readout;
 
@@ -49,6 +51,10 @@ export component TimelineTray inherits Rectangle {
     callback split();
     callback merge();
     callback delete-selected();
+    /// Cuts the ruler selection out of the timeline and closes the gap.
+    callback delete-range();
+    /// Opens the remove-silence sheet.
+    callback remove-silence();
     callback av-tools(at-x: length);
     callback add-track();
     /// Drops a marker at the playhead - the toolbar twin of double-clicking
@@ -118,6 +124,22 @@ export component TimelineTray inherits Rectangle {
             icon-size: 16px;
             enabled: root.selected-count > 0;
             clicked => { root.delete-selected(); }
+        }
+        IconButton {
+            glyph: Glyph.range-cut;
+            label: root.has-range ? "Delete selected range and close the gap"
+                : "Delete range: Shift-drag the ruler to select one";
+            danger: true;
+            icon-size: 16px;
+            enabled: root.has-range;
+            clicked => { root.delete-range(); }
+        }
+        IconButton {
+            glyph: Glyph.silence;
+            label: root.has-range ? "Remove silence in the selected range"
+                : "Remove silence";
+            icon-size: 16px;
+            clicked => { root.remove-silence(); }
         }
 
         // The count of a multiple selection, in the accent so it reads as a

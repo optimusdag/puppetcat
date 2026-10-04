@@ -4633,6 +4633,7 @@ version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "puppetcat-core",
+ "puppetcat-effects",
  "puppetcat-export",
  "puppetcat-host",
  "puppetcat-media",

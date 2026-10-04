@@ -47,7 +47,9 @@ use crate::prefs::Preferences;
 use crate::ui::*;
 
 mod cleanup;
+mod files;
 mod ripple;
+pub use files::{ProjectSheet, RelinkState};
 pub use ripple::RippleState;
 pub use cleanup::{SilenceScope, SilenceState};
 
@@ -486,6 +488,7 @@ pub struct Models {
     pub timeline_menu: Rc<VecModel<MenuItemData>>,
     /// The export sheet's marker choices, by time.
     pub export_markers: Rc<VecModel<SharedString>>,
+    pub relink_rows: Rc<VecModel<RelinkRowData>>,
     /// The export sheet's resolution rungs, in this project's own shape.
     pub export_sizes: Rc<VecModel<SharedString>>,
     pub av: Rc<VecModel<MenuItemData>>,
@@ -524,6 +527,7 @@ impl Models {
             marker_menu: Rc::new(VecModel::default()),
             timeline_menu: Rc::new(VecModel::default()),
             export_markers: Rc::new(VecModel::default()),
+            relink_rows: Rc::new(VecModel::default()),
             export_sizes: Rc::new(VecModel::default()),
             av: Rc::new(VecModel::default()),
             bar: Rc::new(VecModel::default()),
@@ -639,6 +643,8 @@ pub struct Studio {
     pub export: ExportState,
     pub silence: SilenceState,
     pub ripple: RippleState,
+    pub relink: RelinkState,
+    pub project_sheet: ProjectSheet,
     /// The timeline range selection, Shift-dragged on the ruler: seconds
     /// `(start, end)`, what an export of "the selection" covers.
     pub range: Option<(f64, f64)>,
@@ -1033,6 +1039,8 @@ impl Studio {
             export: ExportState::default(),
             silence: SilenceState::default(),
             ripple: RippleState::default(),
+            relink: RelinkState::default(),
+            project_sheet: ProjectSheet::default(),
             range: None,
             settings: SettingsState::default(),
             transcribers: Vec::new(),
@@ -4629,6 +4637,9 @@ impl Studio {
         app.set_export(self.export_data());
         app.set_silence(self.silence_data());
         app.set_gap(self.gap_data());
+        app.set_project_sheet(self.project_data());
+        app.set_relink(self.relink_data());
+        sync(&models.relink_rows, self.relink_rows());
         sync(
             &models.export_sizes,
             (0..4)
@@ -5132,6 +5143,21 @@ impl Studio {
                     true,
                 ),
                 row("speech", "Text to speech…".into(), Glyph::Volume, "", true),
+                rule(),
+                row(
+                    "project-sheet",
+                    "Rename or move project…".into(),
+                    Glyph::Folder,
+                    "",
+                    true,
+                ),
+                row(
+                    "relink",
+                    "Relink media…".into(),
+                    Glyph::Import,
+                    "",
+                    !puppetcat_host::lifecycle::missing_media(self.project()).is_empty(),
+                ),
                 rule(),
                 row("settings", "Settings…".into(), Glyph::Settings, "⌘,", true),
                 rule(),

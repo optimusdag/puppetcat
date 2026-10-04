@@ -1,0 +1,96 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 PuppetCat contributors
+
+import { Theme } from "../theme/theme.slint";
+import { Glyph } from "../icons.slint";
+import { Button, DialogRow, DialogSection, Field, Modal } from "../primitives/modal.slint";
+
+// The project sheet: its name, and where its folder lives. Renaming changes
+// the name shown in the app; moving renames the folder on disk and reopens the
+// project there.
+
+export struct ProjectData {
+    open: bool,
+    name: string,
+    /// where the folder is now, shortened for display by the caller
+    folder: string,
+    /// the folder it would move into; empty leaves it where it is
+    new-parent: string,
+    /// why the last attempt failed
+    error: string,
+    /// the name or the location differs from what is saved
+    changed: bool,
+}
+
+export component ProjectDialog inherits Modal {
+    in property <ProjectData> data;
+
+    callback name-edited(text: string);
+    callback browse();
+    callback clear-move();
+    callback apply();
+
+    open: root.data.open;
+    title: "Project";
+    glyph: Glyph.folder;
+    surface-width: 460px;
+
+    VerticalLayout {
+        DialogSection {
+            first: true;
+            title: "Name";
+
+            DialogRow {
+                Field {
+                    value: root.data.name;
+                    edited(text) => { root.name-edited(text); }
+                }
+            }
+        }
+
+        DialogSection {
+            title: "Location";
+
+            Text {
+                text: root.data.folder;
+                color: Theme.fg-dim;
+                font-family: Theme.font-technical;
+                font-size: Theme.fs-sm;
+                overflow: elide;
+            }
+
+            DialogRow {
+                Field {
+                    value: root.data.new-parent;
+                    technical: true;
+                    placeholder: "Move into another folder…";
+                    edited(text) => { root.clear-move(); }
+                }
+
+                Button {
+                    label: "Browse";
+                    glyph: Glyph.import;
+                    clicked => { root.browse(); }
+                }
+            }
+
+            if root.data.error != "": Text {
+                text: root.data.error;
+                color: Theme.danger;
+                font-size: Theme.fs-sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                Button {
+                    block: true;
+                    primary: true;
+                    large: true;
+                    label: root.data.new-parent != "" ? "Rename and move" : "Rename";
+                    enabled: root.data.changed && root.data.name != "";
+                    clicked => { root.apply(); }
+                }
+            }
+        }
+    }
+}

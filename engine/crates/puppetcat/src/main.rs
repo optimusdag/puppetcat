@@ -123,6 +123,7 @@ fn main() -> Result<(), slint::PlatformError> {
         editor.set_markers(ModelRc::from(models.markers.clone()));
         app.set_export_markers(ModelRc::from(models.export_markers.clone()));
         app.set_export_sizes(ModelRc::from(models.export_sizes.clone()));
+        app.set_relink_rows(ModelRc::from(models.relink_rows.clone()));
         editor.set_stage_items(ModelRc::from(models.stage.clone()));
         editor.set_stage_guides(ModelRc::from(models.guides.clone()));
         editor.set_media(ModelRc::from(models.media.clone()));
@@ -929,6 +930,42 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_export_closed(on_window!(|state| {
         state.export.open = false;
     }));
+    app.on_project_closed(on_window!(|state| {
+        state.project_sheet.open = false;
+    }));
+    app.on_project_name_edited(on_window!(|state, text: SharedString| {
+        state.project_sheet.name = text.to_string();
+        state.project_sheet.error.clear();
+    }));
+    app.on_project_browse(on_window!(|state| {
+        state.project_sheet_browse();
+    }));
+    app.on_project_clear_move(on_window!(|state| {
+        state.project_sheet.new_parent.clear();
+    }));
+    app.on_project_apply(on_window!(|state| {
+        state.apply_project_sheet();
+    }));
+    app.on_relink_closed(on_window!(|state| {
+        state.close_relink();
+    }));
+    app.on_relink_old_root_edited(on_window!(|state, text: SharedString| {
+        state.relink.old_root = text.to_string();
+        state.relink_roots_edited();
+    }));
+    app.on_relink_new_root_edited(on_window!(|state, text: SharedString| {
+        state.relink.new_root = text.to_string();
+        state.relink_roots_edited();
+    }));
+    app.on_relink_browse(on_window!(|state| {
+        state.relink_browse();
+    }));
+    app.on_relink_locate(on_window!(|state, index: i32| {
+        state.relink_locate(index.max(0) as usize);
+    }));
+    app.on_relink_apply(on_window!(|state| {
+        state.apply_relink();
+    }));
     app.on_gap_closed(on_window!(|state| {
         state.ripple.gap_open = false;
     }));
@@ -1117,6 +1154,8 @@ fn main() -> Result<(), slint::PlatformError> {
                             state.export.message.clear();
                         }
                         "template" => state.save_template(),
+                        "project-sheet" => state.open_project_sheet(),
+                        "relink" => state.open_relink(),
                         "speech" => state.speak_selected(),
                         "settings" => {
                             state.refresh_models();

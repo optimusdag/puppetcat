@@ -3014,6 +3014,76 @@ mod tests {
         assert_eq!(outro.video_fade_in, 0.5);
     }
 
+    /// End to end against a real FFmpeg: a one-pixel black still with no
+    /// stated shape - the black of a fade - covers the whole of a wide frame,
+    /// corners included, rather than sitting in it as a square. Skips
+    /// silently without FFmpeg.
+    #[test]
+    fn a_one_pixel_black_still_covers_a_wide_frame() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_media::{DecodeOptions, Decoder, EncodeOptions, Encoder, FrameSink};
+        use std::sync::atomic::AtomicBool;
+
+        let dir = std::env::temp_dir();
+        let film = dir.join("puppetcat-wide-film.mp4");
+        let Ok(mut enc) =
+            Encoder::create(&film, 96, 54, FrameRate::THIRTY, &EncodeOptions::default())
+        else {
+            return; // no ffmpeg here
+        };
+        for _ in 0..30 {
+            let mut frame = Frame::black(96, 54);
+            frame.fill([255, 0, 0, 255]);
+            enc.write_frame(&frame).expect("writes");
+        }
+        enc.finish().expect("finishes");
+        let black = dir.join("puppetcat-black-1x1.png");
+        let bytes = puppetcat_media::png(&Frame::black(1, 1)).expect("encodes a png");
+        std::fs::write(&black, bytes).expect("writes the png");
+
+        let mut under = clip("video", 0, 0.0, 1.0, 0.0);
+        under.path = film.to_string_lossy().into_owned();
+        under.media_width = Some(96);
+        under.media_height = Some(54);
+        // The black sits on the lane above, over the whole second, with no
+        // media shape: exactly what the flattener hands over for it.
+        let mut over = clip("image", 1, 0.0, 1.0, 0.0);
+        over.path = black.to_string_lossy().into_owned();
+
+        let out = dir.join("puppetcat-wide-out.mp4");
+        let request = ExportRequest {
+            output: out.to_string_lossy().into_owned(),
+            scratch_dir: None,
+            width: 96,
+            height: 54,
+            rate_num: 30,
+            rate_den: 1,
+            crf: 18,
+            preset: "medium".to_owned(),
+            clips: vec![under, over],
+            range: None,
+        };
+        let cancel = AtomicBool::new(false);
+        let mut progress = |_: i64, _: i64, _: &'static str| {};
+        let written = render(
+            &request,
+            Reporter {
+                progress: &mut progress,
+                cancel: &cancel,
+            },
+        )
+        .expect("renders");
+        let mut decoder = Decoder::open(&written, &DecodeOptions::default()).expect("decodes");
+        let frame = decoder.next_frame().expect("decodes").expect("a frame");
+        for (x, y) in [(2, 2), (93, 2), (2, 51), (93, 51), (48, 27)] {
+            let pixel = frame.pixel(x, y).expect("in range");
+            assert!(pixel[0] < 60, "({x},{y}) still shows the film: {pixel:?}");
+        }
+        let _ = std::fs::remove_file(&film);
+        let _ = std::fs::remove_file(&black);
+        let _ = std::fs::remove_file(&written);
+    }
+
     #[test]
     fn a_motion_between_different_clips_runs_the_outgoing_clip_on_under_the_incoming() {
         // Two different files; the first was trimmed to 2 s of a 10 s file,

@@ -87,6 +87,14 @@ pub fn flatten_timeline(project: &Project, timeline_id: Option<&str>) -> Vec<Exp
 
             let media = project.media.iter().find(|item| item.id == clip.media_id)?;
 
+            // A plain colour PuppetCat generated (the black of a fade) is one
+            // pixel, and has no shape of its own: left unmeasured it fills the
+            // frame, where its 1x1 size would fit it as a square.
+            let shape = if media.path.contains("/.puppetcat-generated/solid-") {
+                None
+            } else {
+                media.width.zip(media.height)
+            };
             Some(ExportClip {
                 path: media.path.clone(),
                 kind: match clip.kind {
@@ -149,9 +157,9 @@ pub fn flatten_timeline(project: &Project, timeline_id: Option<&str>) -> Vec<Exp
                 video_fade_out: 0.0,
                 motion_in: None,
                 motion_out: None,
-                media_width: media.width,
+                media_width: shape.map(|(width, _)| width),
                 media_duration: media.duration,
-                media_height: media.height,
+                media_height: shape.map(|(_, height)| height),
                 has_audio: Some(media.has_audio),
             })
         })
@@ -265,6 +273,53 @@ mod tests {
         assert_eq!(clip.has_audio, Some(true));
         assert_eq!(clip.filter_chain, "");
         assert_eq!(clip.video_filter_chain, "");
+    }
+
+    #[test]
+    fn a_generated_black_fills_the_frame_instead_of_fitting_as_a_square() {
+        let (mut editor, _, _) = project_with_clip();
+        let black = editor
+            .apply(Command::AddMedia {
+                item: NewMedia {
+                    path: "/proj/.puppetcat-generated/solid-000000.png".to_owned(),
+                    name: "solid-000000.png".to_owned(),
+                    duration: None,
+                    kind: puppetcat_project::model::MediaKind::Image,
+                    width: Some(1),
+                    height: Some(1),
+                    frame_rate: None,
+                    frame_rate_fraction: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    has_audio: false,
+                },
+            })
+            .expect("adds media")
+            .created_id
+            .expect("mints an id");
+        let track_id = editor.project().timelines[0].tracks[0].id.clone();
+        editor
+            .apply(Command::AddClip {
+                media_id: black,
+                track_id,
+                start: 20.0,
+            })
+            .expect("adds clip");
+        let flat = flatten_timeline(editor.project(), None);
+        let film = flat
+            .iter()
+            .find(|c| c.path == "/footage/a.mp4")
+            .expect("film");
+        let still = flat
+            .iter()
+            .find(|c| c.path.contains("solid-"))
+            .expect("black");
+        assert_eq!(
+            film.media_width,
+            Some(1920),
+            "ordinary media keeps its shape"
+        );
+        assert_eq!((still.media_width, still.media_height), (None, None));
     }
 
     #[test]

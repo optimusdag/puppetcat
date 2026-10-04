@@ -26,6 +26,7 @@ import { Modal } from "primitives/modal.slint";
 import { ExportData, ExportDialog, ExportPhase } from "dialogs/export.slint";
 import { SilenceData, SilenceDialog, SilencePhase } from "dialogs/silence.slint";
 import { GapData, GapDialog } from "dialogs/gap.slint";
+import { LayoutRowData, LayoutsData, LayoutsDialog } from "dialogs/layouts.slint";
 import { BatchData, BatchDialog, BatchRowData } from "dialogs/batch.slint";
 import { BookendsData, BookendsDialog } from "dialogs/bookends.slint";
 import { ProjectData, ProjectDialog } from "dialogs/project.slint";
@@ -57,7 +58,7 @@ export {
     EffectData, MediaFilter, MediaItemData, MediaKind,
     ClipData, ClipField, ClipKind, ClipTextField, DropData, SelectedClipData,
     StageGuideData, StageItemData, TextAlignment, TimelineTabData, TimelineTool,
-    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, SilenceData, SilencePhase, GapData, BatchData, BatchRowData, BookendsData, ProjectData, RelinkData, RelinkRowData, ModelData, SettingsData,
+    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, SilenceData, SilencePhase, GapData, LayoutsData, LayoutRowData, BatchData, BatchRowData, BookendsData, ProjectData, RelinkData, RelinkRowData, ModelData, SettingsData,
     RecentProjectData, StartData, SystemFactData, ToastData,
 }
 
@@ -142,6 +143,15 @@ export component App inherits Window {
     in property <ExportData> export;
     in property <SilenceData> silence;
     in property <GapData> gap;
+    in property <LayoutsData> layouts;
+    in property <[LayoutRowData]> layout-rows;
+    callback layouts-closed();
+    callback layouts-name-edited(text: string);
+    callback layouts-save();
+    callback layouts-apply(index: int);
+    callback layouts-remove(index: int);
+    callback layouts-export();
+    callback layouts-import();
     in property <BatchData> batch;
     in property <[BatchRowData]> batch-rows;
     callback batch-closed();
@@ -446,6 +456,23 @@ callback export-closed();
         tail-changed(value) => { root.batch-tail-changed(value); }
         start => { root.batch-start(); }
         cancel => { root.batch-cancel(); }
+    }
+
+    LayoutsDialog {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        data: root.layouts;
+        rows: root.layout-rows;
+
+        closed => { root.layouts-closed(); }
+        name-edited(text) => { root.layouts-name-edited(text); }
+        save => { root.layouts-save(); }
+        apply(index) => { root.layouts-apply(index); }
+        remove(index) => { root.layouts-remove(index); }
+        export-file => { root.layouts-export(); }
+        import-file => { root.layouts-import(); }
     }
 
     GapDialog {

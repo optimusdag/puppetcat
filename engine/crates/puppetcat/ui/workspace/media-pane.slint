@@ -35,6 +35,8 @@ export struct MediaItemData {
     /// a file should look like itself wherever it is drawn.
     wave: string,
     selected: bool,
+    /// a template slot: a stand-in that someone else's file will replace
+    slot: bool,
 }
 
 // ── the page strip ───────────────────────────────────────────────────────────
@@ -448,6 +450,25 @@ component MediaCard inherits Rectangle {
                 // what kind a card is — footage carries a duration stamp, audio
                 // is a waveform, a still says "still" — so a badge would repeat
                 // information the card gives away at a glance.
+
+                // A template slot says so, top left, on the same scrim as the
+                // duration: it is what tells a stand-in from real footage.
+                if root.item.slot: Rectangle {
+                    x: 4px;
+                    y: 4px;
+                    width: 20px;
+                    height: 18px;
+                    border-radius: Theme.r-xs;
+                    background: Theme.scrim;
+
+                    Icon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        glyph: Glyph.slot;
+                        size: 12px;
+                        tint: Theme.on-scrim;
+                    }
+                }
 
                 // Duration, bottom right, on its own scrim because what is behind
                 // it is a video frame and cannot be relied on for contrast.

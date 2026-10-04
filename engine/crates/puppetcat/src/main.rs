@@ -125,6 +125,7 @@ fn main() -> Result<(), slint::PlatformError> {
         app.set_export_sizes(ModelRc::from(models.export_sizes.clone()));
         app.set_relink_rows(ModelRc::from(models.relink_rows.clone()));
     app.set_batch_rows(ModelRc::from(models.batch_rows.clone()));
+    app.set_layout_rows(ModelRc::from(models.layout_rows.clone()));
         editor.set_stage_items(ModelRc::from(models.stage.clone()));
         editor.set_stage_guides(ModelRc::from(models.guides.clone()));
         editor.set_media(ModelRc::from(models.media.clone()));
@@ -1016,6 +1017,27 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_batch_cancel(on_window!(|state| {
         state.cancel_batch();
     }));
+    app.on_layouts_closed(on_window!(|state| {
+        state.layouts.open = false;
+    }));
+    app.on_layouts_name_edited(on_window!(|state, text: SharedString| {
+        state.layouts.name = text.to_string();
+    }));
+    app.on_layouts_save(on_window!(|state| {
+        state.save_layout();
+    }));
+    app.on_layouts_apply(on_window!(|state, index: i32| {
+        state.apply_layout(index.max(0) as usize);
+    }));
+    app.on_layouts_remove(on_window!(|state, index: i32| {
+        state.remove_layout(index.max(0) as usize);
+    }));
+    app.on_layouts_export(on_window!(|state| {
+        state.export_layouts();
+    }));
+    app.on_layouts_import(on_window!(|state| {
+        state.import_layouts();
+    }));
     app.on_gap_closed(on_window!(|state| {
         state.ripple.gap_open = false;
     }));
@@ -1207,6 +1229,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         "project-sheet" => state.open_project_sheet(),
                         "relink" => state.open_relink(),
                         "batch" => state.open_batch(),
+                        "slots" => state.toggle_slots(),
+                        "fill-slot" => state.fill_slot(),
+                        "layouts" => state.layouts.open = true,
                         "bookends" => {
                             state.bookends.error.clear();
                             state.bookends.open = true;

@@ -1,0 +1,166 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 PuppetCat contributors
+
+import { Theme } from "../theme/theme.slint";
+import { Glyph } from "../icons.slint";
+import { Button, DialogRow, DialogSection, Field, Modal } from "../primitives/modal.slint";
+
+// The layouts sheet: a picture's placement - scale, position, rotation,
+// opacity, flips, blend, crop - saved under a name and stamped onto other
+// clips. Saved from the selected clip; applied to the selection.
+
+export struct LayoutRowData {
+    name: string,
+    /// "×1.20 · x +0.10 · y 0.00 · 15°"
+    summary: string,
+}
+
+export struct LayoutsData {
+    open: bool,
+    /// the name the next layout is saved under
+    name: string,
+    /// a visual clip is selected, so one can be saved and applied
+    has-selection: bool,
+    /// what the selection is, or how to select one
+    selection: string,
+}
+
+component LayoutRow inherits Rectangle {
+    in property <LayoutRowData> entry;
+    in property <bool> can-apply;
+    callback apply();
+    callback remove();
+
+    height: 40px;
+    background: Theme.raised;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 6px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+
+            Text {
+                text: root.entry.name;
+                color: Theme.fg;
+                font-size: Theme.fs;
+                font-weight: Theme.weight-title;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.entry.summary;
+                color: Theme.fg-dim;
+                font-family: Theme.font-technical;
+                font-size: Theme.fs-sm;
+                overflow: elide;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Button {
+                label: "Apply";
+                enabled: root.can-apply;
+                clicked => { root.apply(); }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Button {
+                label: "Delete";
+                ghost: true;
+                glyph: Glyph.trash;
+                clicked => { root.remove(); }
+            }
+        }
+    }
+}
+
+export component LayoutsDialog inherits Modal {
+    in property <LayoutsData> data;
+    in property <[LayoutRowData]> rows;
+
+    callback name-edited(text: string);
+    callback save();
+    callback apply(index: int);
+    callback remove(index: int);
+    callback export-file();
+    callback import-file();
+
+    open: root.data.open;
+    title: "Layouts";
+    glyph: Glyph.frame;
+    surface-width: 480px;
+    note: root.data.selection;
+
+    VerticalLayout {
+        DialogSection {
+            first: true;
+            title: "Save the selected clip's placement";
+
+            DialogRow {
+                Field {
+                    value: root.data.name;
+                    placeholder: "Layout name";
+                    edited(text) => { root.name-edited(text); }
+                }
+
+                Button {
+                    label: "Save";
+                    primary: true;
+                    enabled: root.data.has-selection && root.data.name != "";
+                    clicked => { root.save(); }
+                }
+            }
+        }
+
+        DialogSection {
+            title: "Saved layouts";
+
+            if root.rows.length == 0: Text {
+                text: "None yet. Position a clip, then save it here.";
+                color: Theme.fg-dim;
+                font-size: Theme.fs-sm;
+                wrap: word-wrap;
+            }
+
+            Flickable {
+                height: Math.min(root.rows.length * 41px, 220px);
+                viewport-height: root.rows.length * 41px;
+
+                VerticalLayout {
+                    spacing: 1px;
+                    for entry[index] in root.rows: LayoutRow {
+                        entry: entry;
+                        can-apply: root.data.has-selection;
+                        apply => { root.apply(index); }
+                        remove => { root.remove(index); }
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+
+                Button {
+                    label: "Export…";
+                    glyph: Glyph.export;
+                    enabled: root.rows.length > 0;
+                    clicked => { root.export-file(); }
+                }
+                Button {
+                    label: "Import…";
+                    glyph: Glyph.import;
+                    clicked => { root.import-file(); }
+                }
+            }
+        }
+    }
+}

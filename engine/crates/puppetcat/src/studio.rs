@@ -49,8 +49,11 @@ use crate::ui::*;
 mod batch;
 mod cleanup;
 mod files;
+mod layouts;
 mod ripple;
+mod slots;
 pub use files::{ProjectSheet, RelinkState};
+pub use layouts::LayoutsState;
 pub use ripple::{BookendsState, RippleState};
 pub use batch::BatchState;
 pub use cleanup::{SilenceScope, SilenceState};
@@ -491,6 +494,7 @@ pub struct Models {
     /// The export sheet's marker choices, by time.
     pub export_markers: Rc<VecModel<SharedString>>,
     pub relink_rows: Rc<VecModel<RelinkRowData>>,
+    pub layout_rows: Rc<VecModel<LayoutRowData>>,
     pub batch_rows: Rc<VecModel<BatchRowData>>,
     /// The export sheet's resolution rungs, in this project's own shape.
     pub export_sizes: Rc<VecModel<SharedString>>,
@@ -531,6 +535,7 @@ impl Models {
             timeline_menu: Rc::new(VecModel::default()),
             export_markers: Rc::new(VecModel::default()),
             relink_rows: Rc::new(VecModel::default()),
+            layout_rows: Rc::new(VecModel::default()),
             batch_rows: Rc::new(VecModel::default()),
             export_sizes: Rc::new(VecModel::default()),
             av: Rc::new(VecModel::default()),
@@ -647,6 +652,7 @@ pub struct Studio {
     pub export: ExportState,
     pub silence: SilenceState,
     pub ripple: RippleState,
+    pub layouts: LayoutsState,
     pub batch: BatchState,
     pub bookends: BookendsState,
     pub relink: RelinkState,
@@ -1045,6 +1051,7 @@ impl Studio {
             export: ExportState::default(),
             silence: SilenceState::default(),
             ripple: RippleState::default(),
+            layouts: LayoutsState::default(),
             batch: BatchState::default(),
             bookends: BookendsState::default(),
             relink: RelinkState::default(),
@@ -4592,6 +4599,7 @@ impl Studio {
                         _ => SharedString::new(),
                     },
                     selected: self.media_selected.contains(&item.id),
+                    slot: item.placeholder,
                 })
                 .collect(),
         );
@@ -4645,6 +4653,8 @@ impl Studio {
         app.set_export(self.export_data());
         app.set_silence(self.silence_data());
         app.set_gap(self.gap_data());
+        app.set_layouts(self.layouts_data());
+        sync(&models.layout_rows, self.layout_rows());
         app.set_batch(self.batch_data());
         sync(&models.batch_rows, self.batch_rows());
         app.set_bookends(self.bookends_data());
@@ -5146,6 +5156,24 @@ impl Studio {
                     "",
                     !self.timeline().clips.is_empty(),
                 ),
+                MenuItemData {
+                    id: "slots".into(),
+                    label: "Template slot".into(),
+                    kind: MenuRow::Action,
+                    glyph: Glyph::None,
+                    shortcut: SharedString::new(),
+                    enabled: has_selection_media,
+                    danger: false,
+                    checkable: true,
+                    checked: self.selection_is_slots(),
+                },
+                row(
+                    "fill-slot",
+                    "Fill template slot…".into(),
+                    Glyph::Slot,
+                    "",
+                    self.fillable_slot().is_some(),
+                ),
                 row(
                     "batch",
                     "Export in batch…".into(),
@@ -5249,6 +5277,13 @@ impl Studio {
                     "ripple-markers",
                     "Free markers follow",
                     self.ripple.markers,
+                ),
+                row(
+                    "layouts",
+                    "Layouts…".into(),
+                    Glyph::Frame,
+                    "",
+                    true,
                 ),
                 row(
                     "bookends",

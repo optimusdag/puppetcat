@@ -30,6 +30,7 @@ mod ui {
     slint::include_modules!();
 }
 
+mod bridge;
 mod chips;
 mod dock;
 mod format;
@@ -1401,7 +1402,13 @@ fn main() -> Result<(), slint::PlatformError> {
         shell.studio.borrow().publish(&app, &shell.models);
     }
 
+    // Serving the agent's tools from this window, from here until it closes.
+    let agent_bridge = bridge::start(&shell.studio.borrow());
+
     let result = app.run();
+    // Stops serving first, so no call can reach into the window while it comes
+    // down.
+    drop(agent_bridge);
     // Drops SHELL's own strong reference here, on `main`'s stack, so the
     // real teardown of `shell` (below, at the end of this scope) happens as
     // an ordinary drop rather than from inside SHELL's own thread-local

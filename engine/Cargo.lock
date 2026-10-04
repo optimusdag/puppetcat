@@ -4623,6 +4623,7 @@ version = "0.4.0"
 dependencies = [
  "opener",
  "pollster",
+ "puppetcat-agent",
  "puppetcat-core",
  "puppetcat-effects",
  "puppetcat-export",

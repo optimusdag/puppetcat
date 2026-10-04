@@ -47,6 +47,7 @@ use crate::prefs::Preferences;
 use crate::ui::*;
 
 mod batch;
+mod bridge;
 mod cleanup;
 mod files;
 mod layouts;
@@ -580,6 +581,9 @@ enum BlockedBy {
     Agent,
     /// Another `puppetcat` window has this project open.
     OtherWindow,
+    /// An agent's tool call is running against this window's own session,
+    /// which is lent to it until the call ends.
+    Bridge,
 }
 
 /// The window's state. See the module docs for what is whose.
@@ -653,6 +657,9 @@ pub struct Studio {
     // ── the sheets and menus ──
     pub export: ExportState,
     pub silence: SilenceState,
+    /// While the session is out with an agent's tool call: the path of the
+    /// project it was (`None` inside when no project was open).
+    pub lent: Option<Option<String>>,
     pub ripple: RippleState,
     pub layouts: LayoutsState,
     pub batch: BatchState,
@@ -1052,6 +1059,7 @@ impl Studio {
             preview_failed: false,
             export: ExportState::default(),
             silence: SilenceState::default(),
+            lent: None,
             ripple: RippleState::default(),
             layouts: LayoutsState::default(),
             batch: BatchState::default(),
@@ -3523,6 +3531,10 @@ impl Studio {
     /// and reloads the project from disk the moment `blocked` clears, so
     /// whatever the other owner saved is never missed.
     fn poll_lock(&mut self) {
+        // The session is out with an agent's call, not gone.
+        if self.lent.is_some() {
+            return;
+        }
         let Some(session) = self.session.as_ref() else {
             self.lock_watch.stop();
             return;
@@ -4178,6 +4190,16 @@ impl Studio {
     // ── publishing ──
 
     pub fn publish(&self, app: &App, models: &Models) {
+        // While the session is out with an agent's call there is nothing true
+        // to show: leave the last picture up behind the overlay rather than
+        // redraw an empty project, and say what the wait is.
+        if self.lent.is_some() {
+            app.set_blocked(true);
+            app.set_blocked_reason(
+                "An agent is editing this project - this window will resume in a moment.".into(),
+            );
+            return;
+        }
         self.publish_lanes(app, models);
         self.publish_chrome(app, models);
         self.publish_dock(app, models);
@@ -4553,6 +4575,7 @@ impl Studio {
                 BlockedBy::OtherWindow => {
                     "Already open in another PuppetCat window - this window will resume when it's closed there."
                 }
+                BlockedBy::Bridge => "An agent is editing this project - this window will resume in a moment.",
             }
             .into(),
         );

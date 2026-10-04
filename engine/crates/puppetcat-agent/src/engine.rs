@@ -448,6 +448,14 @@ impl AgentEngine {
         }) {
             *guard = None;
         }
+        // A session the window lent for this call is the window's work: save
+        // it before it is replaced, so switching projects through the window
+        // does not cost the edits that were never saved.
+        if let Some(open) = guard.as_mut()
+            && open._lock.is_none()
+        {
+            open.session.save(None, None, None)?;
+        }
         let lock = SlotLock::try_acquire(Path::new(&info.path), Slot::Agent)
             .ok_or_else(|| "another agent session already has this project open".to_owned())?;
         let session = puppetcat_host::Session::open_info(info)?;

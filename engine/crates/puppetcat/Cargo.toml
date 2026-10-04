@@ -54,6 +54,9 @@ puppetcat-host = { workspace = true, features = ["gpu"] }
 puppetcat-speech.workspace = true
 # The effect catalogue: the inspector's shelves and each link's knobs.
 puppetcat-effects.workspace = true
+# Hosts the agent's tools on a local socket, so an MCP session drives this
+# very window; see bridge.rs.
+puppetcat-agent = { path = "../puppetcat-agent" }
 
 # Native file and folder dialogs, which Slint deliberately does not have.
 rfd = "0.17"

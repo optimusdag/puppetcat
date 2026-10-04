@@ -1778,18 +1778,19 @@ impl ServerHandler for ConcatAgentServer {
             .with_server_info(Implementation::from_build_env())
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_instructions(
-                "Drives a full PuppetCat editing session with no window: create or open a \
-             project, edit its timeline through curated tools or the apply_raw_command \
-             escape hatch (which covers every operation), render_snapshot to see the \
-             result, and export. One project is open at a time; create_project or \
-             open_project must be called before any editing tool.\n\n\
-             Opening or creating a project here takes an exclusive claim on it: if the \
-             PuppetCat window has that same project open, it blocks all input there for \
-             as long as this session keeps the project open - not only while a command \
-             is actually running. Call close_project as soon as the current change or \
-             set of changes is done, even if the same project will be opened again soon, \
-             so the person at the window can resume; save_project alone does not release \
-             the claim, only close_project does."
+                "Drives a full PuppetCat editing session: create or open a project, edit \
+             its timeline through curated tools or the apply_raw_command escape hatch \
+             (which covers every operation), render_snapshot to see the result, and \
+             export. create_project or open_project must be called before any editing \
+             tool.\n\n\
+             When a PuppetCat window is running, these tools run inside it: you edit the \
+             project the person has open, their window shows each change as it happens, \
+             and undo covers your edits. open_project or create_project then opens the \
+             project in that window. The window waits for the length of each call only. \
+             With no window running, this server works on the project itself and takes an \
+             exclusive claim on it: a window that opens the same project is blocked for \
+             as long as this session keeps it open, so call close_project as soon as the \
+             current set of changes is done; save_project alone does not release the claim."
                     .to_owned(),
             )
     }

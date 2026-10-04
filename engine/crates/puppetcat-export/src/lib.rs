@@ -3258,8 +3258,8 @@ mod tests {
             "second cut is a hard cut: {mid_second:?}"
         );
         // And the picture is never black through either.
-        for index in 62..90 {
-            let p = frames[index].pixel(32, 32).expect("in range");
+        for (index, frame) in frames.iter().enumerate().take(90).skip(62) {
+            let p = frame.pixel(32, 32).expect("in range");
             assert!(
                 p[0] > 40 || p[1] > 40 || p[2] > 40,
                 "black at frame {index}: {p:?}"

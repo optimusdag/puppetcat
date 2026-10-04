@@ -10,7 +10,10 @@
 
 use std::path::Path;
 
-use puppetcat_media::{AudioDecoder, AudioOptions, SampleFormat};
+use puppetcat_core::time::{FrameRate, Rational};
+use puppetcat_media::{
+    AudioDecoder, AudioOptions, DecodeOptions, Decoder, FrameSource, SampleFormat,
+};
 use serde::Serialize;
 
 const ANALYSIS_RATE: u32 = 16_000;
@@ -265,6 +268,107 @@ fn push_silence(out: &mut Vec<AudioInterval>, start: f64, end: f64, minimum: f64
     }
 }
 
+/// One detected cut, in the coordinates of whatever was analysed.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneCut {
+    /// The first instant of the new shot, seconds.
+    pub time: f64,
+    /// How different it is from the shot before, `0.0..=1.0`: the mean
+    /// brightness change per pixel. Hard cuts score high; motion scores low.
+    pub score: f64,
+}
+
+/// Frames are compared at this size: enough to tell one shot from the next,
+/// small enough that comparing them costs nothing next to decoding them.
+const SCENE_SIZE: (u32, u32) = (64, 36);
+/// The fastest rate frames are compared at; a 60 fps source is paced down.
+const MAX_SCENE_RATE: f64 = 30.0;
+
+/// Finds the cuts in a stretch of video by comparing each frame with the one
+/// before it. `start` and `end` are source seconds; the cuts come back in the
+/// same. A cut closer than `min_scene` seconds to the previous one is
+/// ignored, which is what keeps a flash or a burst of motion from reading as
+/// a string of cuts.
+pub(crate) fn detect_scenes(
+    path: &Path,
+    start: f64,
+    end: Option<f64>,
+    threshold: f64,
+    min_scene: f64,
+) -> Result<Vec<SceneCut>, String> {
+    let info = puppetcat_media::probe(path).map_err(|error| error.to_string())?;
+    let video = info
+        .video
+        .ok_or_else(|| format!("{} has no video stream", path.display()))?;
+    let rate = video
+        .frame_rate
+        .fps()
+        .as_f64()
+        .clamp(1.0, MAX_SCENE_RATE)
+        .round();
+    let mut options = DecodeOptions::default()
+        .scaled_to(SCENE_SIZE.0, SCENE_SIZE.1)
+        .at_rate(FrameRate::new(Rational::from_int(rate as i64)));
+    let start = start.max(0.0);
+    if start > 0.0 {
+        options = options.starting_at(
+            Rational::approximate(start).ok_or_else(|| "start is not a time".to_owned())?,
+        );
+    }
+    if let Some(end) = end {
+        options = options.limited_to((((end - start).max(0.0) * rate).ceil() as u64).max(1) + 1);
+    }
+    let mut decoder = Decoder::open(path, &options).map_err(|error| error.to_string())?;
+    let mut previous: Option<Vec<u8>> = None;
+    let mut scores = Vec::new();
+    let mut index = 0u64;
+    while let Some(frame) = decoder.next_frame().map_err(|error| error.to_string())? {
+        let luma: Vec<u8> = frame
+            .pixels()
+            .chunks_exact(4)
+            .map(|p| {
+                (0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2])) as u8
+            })
+            .collect();
+        if let Some(before) = &previous {
+            let total: u64 = before
+                .iter()
+                .zip(&luma)
+                .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                .sum();
+            scores.push((
+                start + index as f64 / rate,
+                total as f64 / (luma.len().max(1) as f64 * 255.0),
+            ));
+        }
+        previous = Some(luma);
+        index += 1;
+    }
+    Ok(cuts_from_scores(&scores, 1.0 / rate, threshold, min_scene))
+}
+
+/// The cuts among `(time, difference from the frame before)` scores: every
+/// score at or over `threshold`, thinned so no two are within `min_scene`.
+/// `first_gap` is how long the first shot has already run when the scores
+/// begin (one frame), so a cut on the second frame is held to the same rule.
+fn cuts_from_scores(
+    scores: &[(f64, f64)],
+    first_gap: f64,
+    threshold: f64,
+    min_scene: f64,
+) -> Vec<SceneCut> {
+    let mut cuts: Vec<SceneCut> = Vec::new();
+    let mut last = scores.first().map_or(0.0, |(time, _)| time - first_gap);
+    for &(time, score) in scores {
+        if score >= threshold && time - last + 1e-9 >= min_scene {
+            cuts.push(SceneCut { time, score });
+            last = time;
+        }
+    }
+    cuts
+}
+
 /// The spans worth cutting for a set of silent intervals: each shrunk by
 /// `padding` seconds at both ends, so speech keeps a breath of room, with the
 /// ones left under `minimum` seconds dropped. Latest first, which is the
@@ -295,6 +399,16 @@ pub(crate) fn silence_cuts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_cuts_need_the_threshold_and_room_between_them() {
+        // 10 fps scores: a hard cut at 1.0, a flash right after it at 1.1,
+        // low motion, then another real cut at 3.0.
+        let scores = [(0.1, 0.01), (1.0, 0.6), (1.1, 0.5), (2.0, 0.08), (3.0, 0.4)];
+        let cuts = cuts_from_scores(&scores, 0.1, 0.15, 0.5);
+        let times: Vec<f64> = cuts.iter().map(|c| c.time).collect();
+        assert_eq!(times, vec![1.0, 3.0]);
+    }
 
     #[test]
     fn cuts_keep_padding_drop_short_remnants_and_run_latest_first() {

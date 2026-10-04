@@ -153,6 +153,29 @@ pub struct RemoveSilenceParams {
     pub dry_run: Option<bool>,
 }
 
+/// Parameters for `detect_scenes`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectScenesParams {
+    /// Analyse this bin item's video; times come back in source seconds.
+    pub media_id: Option<String>,
+    /// Analyse the stretch of video this active-timeline clip shows; times
+    /// come back in timeline seconds. Mutually exclusive with `mediaId`.
+    pub clip_id: Option<String>,
+    /// Beginning of the stretch, in the same coordinates as the result.
+    pub start: Option<f64>,
+    /// End of the stretch.
+    pub end: Option<f64>,
+    /// Mean brightness change between frames, 0..1, that counts as a cut.
+    /// Defaults to 0.15; lower finds softer cuts and more false ones.
+    pub threshold: Option<f64>,
+    /// Cuts closer than this many seconds to the one before are ignored.
+    /// Defaults to 0.5.
+    pub min_scene: Option<f64>,
+    /// Drop a marker at each cut of a `clipId`, as one undoable edit.
+    pub add_markers: Option<bool>,
+}
+
 /// Filters and inclusion controls for a compact timeline summary.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -664,6 +687,7 @@ impl ConcatAgentServer {
                 "insertGap": true,
                 "rippleDeleteRange": true,
                 "removeSilence": true,
+                "detectScenes": true,
                 "batchExport": true,
                 "layoutTemplates": true,
                 "mediaRelink": true,
@@ -803,6 +827,31 @@ impl ConcatAgentServer {
         })
         .await
         .map_err(|error| to_mcp_err(format!("silence removal task panicked: {error}")))?
+        .map_err(to_mcp_err)?;
+        ok_json(&result)
+    }
+
+    #[tool(
+        description = "Detect shot changes in a video, by comparing each frame with the one before. Give a `mediaId` (times in source seconds) or a `clipId` (times in timeline seconds, mapped through the clip's trim and speed). Returns the cuts with a difference `score`. With `addMarkers` and a `clipId`, drops a marker at each cut as one undoable edit; follow with `split_clips` at those times to cut the clip apart. Tune `threshold` (default 0.15) if cuts are missed or invented."
+    )]
+    async fn detect_scenes(
+        &self,
+        Parameters(params): Parameters<DetectScenesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let engine = self.engine.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            engine.detect_scenes(
+                params.media_id,
+                params.clip_id,
+                params.start,
+                params.end,
+                params.threshold.unwrap_or(0.15).clamp(0.001, 1.0),
+                params.min_scene.unwrap_or(0.5).max(0.0),
+                params.add_markers.unwrap_or(false),
+            )
+        })
+        .await
+        .map_err(|error| to_mcp_err(format!("scene detection task panicked: {error}")))?
         .map_err(to_mcp_err)?;
         ok_json(&result)
     }

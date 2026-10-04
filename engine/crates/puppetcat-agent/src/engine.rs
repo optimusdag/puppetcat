@@ -192,6 +192,20 @@ pub struct SilenceRemoval {
     pub plan: Option<EditPlanResult>,
 }
 
+/// What `detect_scenes` found.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneDetection {
+    /// What was analysed: `media:<id>` or `clip:<id>`.
+    pub target: String,
+    /// The cuts, earliest first.
+    pub cuts: Vec<analysis::SceneCut>,
+    /// Markers dropped on the timeline, when asked for.
+    pub markers_added: usize,
+    /// Caveats, e.g. a speed curve the mapping ignores.
+    pub warnings: Vec<String>,
+}
+
 /// Replaces every string equal to `$name` with the id that reference
 /// resolved to. An unknown name is an error rather than a literal, so a typo
 /// cannot silently address the wrong object.
@@ -874,6 +888,126 @@ impl AgentEngine {
             include_buckets,
             warnings,
         ))
+    }
+
+    /// Finds the cuts in a bin item's video, or in the stretch of it one
+    /// timeline clip shows, by comparing consecutive frames. Times are
+    /// source seconds for a media item and timeline seconds for a clip.
+    /// With `add_markers`, a clip's cuts are dropped on the timeline as
+    /// markers in one undoable edit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn detect_scenes(
+        &self,
+        media_id: Option<String>,
+        clip_id: Option<String>,
+        start: Option<f64>,
+        end: Option<f64>,
+        threshold: f64,
+        min_scene: f64,
+        add_markers: bool,
+    ) -> Result<SceneDetection, String> {
+        struct Target {
+            label: String,
+            path: String,
+            source_start: f64,
+            source_end: Option<f64>,
+            /// Source seconds to target seconds.
+            to_target: Box<dyn Fn(f64) -> f64 + Send>,
+        }
+        let mut warnings = Vec::new();
+        let target = {
+            let guard = self.session_lock();
+            let session = guard.as_ref().ok_or_else(no_project)?;
+            let project = session.project();
+            match (media_id, clip_id) {
+                (Some(_), Some(_)) => return Err("choose mediaId or clipId, not both".to_owned()),
+                (Some(id), None) => {
+                    let media = project
+                        .media_by_id(&id)
+                        .ok_or_else(|| format!("media {id:?} is not in the bin"))?;
+                    if matches!(media.kind, puppetcat_project::model::MediaKind::Audio) {
+                        return Err(format!("media {id:?} has no picture"));
+                    }
+                    Target {
+                        label: format!("media:{id}"),
+                        path: media.path.clone(),
+                        source_start: start.unwrap_or(0.0).max(0.0),
+                        source_end: end.or(media.duration),
+                        to_target: Box::new(|time| time),
+                    }
+                }
+                (None, Some(id)) => {
+                    let clip = project
+                        .active()
+                        .clip(&id)
+                        .ok_or_else(|| format!("clip {id:?} is not on the active timeline"))?;
+                    if !matches!(clip.kind, ClipKind::Video) {
+                        return Err(format!("clip {id:?} is not a video clip"));
+                    }
+                    let media = project
+                        .media_by_id(&clip.media_id)
+                        .ok_or_else(|| format!("clip {id:?} has no media"))?;
+                    if clip.speed_curve.is_some() || clip.reverse {
+                        warnings.push(
+                            "the clip has a speed curve or plays in reverse; cut times use its mean speed"
+                                .to_owned(),
+                        );
+                    }
+                    let speed = clip.speed.max(0.0625);
+                    let (clip_start, clip_end, source_start) =
+                        (clip.start, clip.start + clip.duration, clip.source_start);
+                    let from = start.unwrap_or(clip_start).clamp(clip_start, clip_end);
+                    let to = end.unwrap_or(clip_end).clamp(from, clip_end);
+                    Target {
+                        label: format!("clip:{id}"),
+                        path: media.path.clone(),
+                        source_start: source_start + (from - clip_start) * speed,
+                        source_end: Some(source_start + (to - clip_start) * speed),
+                        to_target: Box::new(move |time| clip_start + (time - source_start) / speed),
+                    }
+                }
+                (None, None) => return Err("give a mediaId or a clipId".to_owned()),
+            }
+        };
+        if add_markers && !target.label.starts_with("clip:") {
+            return Err("addMarkers needs a clipId: markers live on the timeline".to_owned());
+        }
+        let revision = self.get_state()?.revision;
+        let cuts: Vec<analysis::SceneCut> = analysis::detect_scenes(
+            Path::new(&target.path),
+            target.source_start,
+            target.source_end,
+            threshold,
+            min_scene,
+        )?
+        .into_iter()
+        .map(|cut| analysis::SceneCut {
+            time: (target.to_target)(cut.time),
+            score: cut.score,
+        })
+        .collect();
+        let mut markers_added = 0;
+        if add_markers && !cuts.is_empty() {
+            let operations = cuts
+                .iter()
+                .enumerate()
+                .map(|(index, cut)| {
+                    serde_json::json!({
+                        "op": "addMarker",
+                        "time": cut.time,
+                        "name": format!("Cut {}", index + 1),
+                    })
+                })
+                .collect();
+            self.apply_edit_plan(revision, operations, false, true)?;
+            markers_added = cuts.len();
+        }
+        Ok(SceneDetection {
+            target: target.label,
+            cuts,
+            markers_added,
+            warnings,
+        })
     }
 
     /// Cuts the silence out of the active timeline, or out of one clip's
@@ -1925,6 +2059,102 @@ mod tests {
 
         agent.undo().unwrap();
         assert!((duration() - 3.5).abs() < 0.01, "one undo restores it");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detect_scenes_finds_the_cuts_and_marks_them_on_the_timeline() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_core::time::{FrameRate, Rational};
+        use puppetcat_media::{EncodeOptions, Encoder, FrameSink};
+
+        let (root, agent, first) = project_with_clip("scenes");
+        agent
+            .apply(Command::RemoveClips {
+                clip_ids: vec![first],
+            })
+            .unwrap();
+        // Three one-second shots, 10 fps: dark, light, mid-grey.
+        let path = root.join("shots.mp4");
+        let rate = FrameRate::new(Rational::from_int(10));
+        let Ok(mut encoder) = Encoder::create(&path, 64, 36, rate, &EncodeOptions::default())
+        else {
+            let _ = std::fs::remove_dir_all(&root);
+            return; // no ffmpeg here
+        };
+        for shade in [30u8, 220, 120] {
+            for _ in 0..10 {
+                let mut frame = Frame::black(64, 36);
+                frame.fill([shade, shade, shade, 255]);
+                encoder.write_frame(&frame).expect("writes");
+            }
+        }
+        encoder.finish().expect("finishes");
+
+        let media = agent
+            .apply(Command::AddMedia {
+                item: puppetcat_project::commands::NewMedia {
+                    path: path.to_string_lossy().into_owned(),
+                    name: "shots.mp4".to_owned(),
+                    duration: Some(3.0),
+                    kind: puppetcat_project::model::MediaKind::Video,
+                    width: Some(64),
+                    height: Some(36),
+                    frame_rate: None,
+                    frame_rate_fraction: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    has_audio: false,
+                },
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        // Placed two seconds in, so source and timeline times differ.
+        let clip = agent
+            .apply(Command::AddClip {
+                media_id: media.clone(),
+                track_id: "T1".to_owned(),
+                start: 2.0,
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+
+        let found = agent
+            .detect_scenes(Some(media), None, None, None, 0.15, 0.5, false)
+            .expect("detects");
+        let times: Vec<f64> = found.cuts.iter().map(|c| c.time).collect();
+        assert_eq!(times.len(), 2, "{times:?}");
+        assert!(
+            (times[0] - 1.0).abs() < 0.11 && (times[1] - 2.0).abs() < 0.11,
+            "{times:?}"
+        );
+
+        let marked = agent
+            .detect_scenes(None, Some(clip), None, None, 0.15, 0.5, true)
+            .expect("detects on the clip");
+        assert_eq!(marked.markers_added, 2);
+        assert!(
+            (marked.cuts[0].time - 3.0).abs() < 0.11,
+            "timeline time: {:?}",
+            marked.cuts
+        );
+        let state = agent.get_state().unwrap();
+        let markers = &state.project.active().markers;
+        assert_eq!(markers.len(), 2);
+        assert!((markers[0].time - 3.0).abs() < 0.11);
+
+        agent.undo().unwrap();
+        assert!(
+            agent
+                .get_state()
+                .unwrap()
+                .project
+                .active()
+                .markers
+                .is_empty()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

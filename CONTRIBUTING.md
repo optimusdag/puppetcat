@@ -26,7 +26,7 @@ You will need Rust (see `rust-version` in `engine/Cargo.toml`), the FFmpeg
 Windows and Linux), cmake and a C++ compiler. Then:
 
 ```sh
-cd engine && cargo run -p concat
+cd engine && cargo run -p puppetcat
 ```
 
 That is the editor window. Everything - the engine, the host layer and the
@@ -36,7 +36,7 @@ Slint UI - is one Cargo workspace under `engine/`.
 
 | Path | What lives there |
 |---|---|
-| `engine/crates/` | The engine (core, media, render, export, project), the host layer (`puppetcat-host`, `puppetcat-speech`), the CLI, and `concat`, the Slint editor window |
+| `engine/crates/` | The engine (core, media, render, export, project), the host layer (`puppetcat-host`, `puppetcat-speech`), the CLI, and `puppetcat`, the Slint editor window |
 | `test/` | Media and analysis fixtures |
 
 [`ARCHITECTURE.md`](ARCHITECTURE.md) explains how these fit together and where

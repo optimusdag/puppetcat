@@ -32,7 +32,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 
 use crate::AgentEngine;
-use crate::mcp::ConcatAgentServer;
+use crate::mcp::PuppetCatAgentServer;
 
 /// Where the window listens: beside the recents list, so it is per user and
 /// per `AppDirs`, like everything else the window keeps.
@@ -148,7 +148,7 @@ pub fn host(
     };
     runtime.spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {
-            let server = ConcatAgentServer::hosted(hosted.clone());
+            let server = PuppetCatAgentServer::hosted(hosted.clone());
             tokio::spawn(async move {
                 let (read, write) = stream.into_split();
                 if let Ok(service) = server.serve((read, write)).await {
@@ -415,8 +415,10 @@ mod tests {
             AgentEngine::for_window(AppDirs::under(&root.join("local")), Exporter::new())
                 .expect("engine"),
         );
-        let server =
-            ConcatAgentServer::forwarding(local.clone(), Arc::new(Forwarder::at(socket.clone())));
+        let server = PuppetCatAgentServer::forwarding(
+            local.clone(),
+            Arc::new(Forwarder::at(socket.clone())),
+        );
         let (near, far) = tokio::io::duplex(1 << 20);
         tokio::spawn(async move {
             if let Ok(service) = server.serve(far).await {

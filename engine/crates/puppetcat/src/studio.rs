@@ -898,7 +898,7 @@ fn set_slot(
 }
 
 /// The built-in colour package's id; see `adjust_rows` and `Studio::adjust_set`.
-const ADJUST_ID: &str = "concat.adjust";
+const ADJUST_ID: &str = "puppetcat.adjust";
 
 /// The colour panel's rows: the adjust package's parameters, at the values
 /// the clip's chain holds or at the defaults when the clip carries none.
@@ -4767,7 +4767,7 @@ impl Studio {
             },
             version: env!("CARGO_PKG_VERSION").into(),
             engine: format!(
-                "concat-engine · FFmpeg {}",
+                "puppetcat-engine · FFmpeg {}",
                 puppetcat_media::linked_version()
             )
             .into(),

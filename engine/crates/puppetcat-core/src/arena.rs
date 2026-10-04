@@ -4,7 +4,7 @@
 //! Generational arenas.
 //!
 //! Editor data is a graph - clips reference media, effects reference clips,
-//! nodes reference nodes - and Concat models that with handles into an arena
+//! nodes reference nodes - and PuppetCat models that with handles into an arena
 //! rather than with pointers.
 //!
 //! The short version: [`Id`] is `Copy`, `Eq` and `Hash`, so it goes into undo

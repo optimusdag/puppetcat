@@ -42,7 +42,7 @@ pub struct AudioStream {
 
 /// A summary of one media file.
 ///
-/// Concat only cares about the first video and first audio stream. Multi-stream
+/// PuppetCat only cares about the first video and first audio stream. Multi-stream
 /// files exist, but nothing in the editor addresses them yet, and inventing an
 /// API for a case we do not handle would be worse than not having one.
 #[derive(Clone, Debug)]

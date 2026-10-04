@@ -6,7 +6,7 @@
 //! Video editing is frame-accurate arithmetic on rates that are not
 //! representable in binary floating point. 29.97 fps is really 30000/1001, and
 //! an `f64` accumulator drifts: after an hour of adding `1.0 / 29.97` you are
-//! visibly off. So every timestamp in Concat is a [`Rational`] number of
+//! visibly off. So every timestamp in PuppetCat is a [`Rational`] number of
 //! **seconds**, and conversions to `f64` happen only at the edges - display,
 //! and arguments handed to FFmpeg.
 //!
@@ -38,7 +38,7 @@ const fn gcd(a: i128, b: i128) -> i128 {
 /// An exact rational number, always stored in lowest terms with a positive
 /// denominator.
 ///
-/// Used throughout Concat to mean *seconds* unless a doc comment says otherwise.
+/// Used throughout PuppetCat to mean *seconds* unless a doc comment says otherwise.
 ///
 /// Arithmetic is performed in `i128` and reduced before being stored back into
 /// `i64`. That is enough headroom for any realistic timeline; a value that

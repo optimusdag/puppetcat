@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
 
-//! Concat's editor window, in Slint.
+//! PuppetCat's editor window, in Slint.
 //!
 //! This file is the wiring: it starts the engine's services, builds the
 //! window, and binds every callback the `.slint` tree exposes to the state

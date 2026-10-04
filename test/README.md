@@ -1,6 +1,6 @@
 # Feature experiments
 
-One-off Python prototypes probing candidate Concat features before any of
+One-off Python prototypes probing candidate PuppetCat features before any of
 them earns a Rust implementation. Each measures the thing that decides
 shippability - speed against realtime on ordinary hardware, and output
 quality by ear/eye - because nothing ships that makes the user install

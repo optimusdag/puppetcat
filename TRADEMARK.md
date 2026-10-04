@@ -24,7 +24,7 @@ policy's terms for modified builds.
 - The PuppetCat logo (the circuit-patterned cat mark) and its icon variants
   under [`assets/`](assets/) and [`assets/icons/`](assets/icons/).
 
-Copyright and marks are held by [Your name] (GitHub: [@optimusdag](https://github.com/optimusdag)).
+Copyright and marks are held by the PuppetCat maintainers (GitHub: [@optimusdag](https://github.com/optimusdag)).
 
 ## What you may do without asking
 

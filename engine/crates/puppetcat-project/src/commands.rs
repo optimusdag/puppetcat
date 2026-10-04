@@ -334,7 +334,7 @@ pub enum Command {
         /// Seconds on the timeline; the editorial default when absent.
         #[serde(default)]
         duration: Option<f64>,
-        /// The package the layer applies, e.g. "concat.warm".
+        /// The package the layer applies, e.g. "puppetcat.warm".
         effect_id: String,
         /// What the lane calls it.
         name: String,

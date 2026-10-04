@@ -725,7 +725,7 @@ pub struct StartExportParams {
 /// The MCP server: one [`AgentEngine`] behind the tool router `rmcp`
 /// generates from the methods below.
 #[derive(Clone)]
-pub struct ConcatAgentServer {
+pub struct PuppetCatAgentServer {
     engine: Arc<AgentEngine>,
     /// Where tool calls run: here, here after trying a window, or in the
     /// window this server is hosted by. See [`crate::bridge`].
@@ -734,7 +734,7 @@ pub struct ConcatAgentServer {
     // not by anything in this file - the dead_code pass doesn't see across
     // the two macro-expanded impl blocks, hence the `allow`.
     #[allow(dead_code)]
-    tool_router: ToolRouter<ConcatAgentServer>,
+    tool_router: ToolRouter<PuppetCatAgentServer>,
 }
 
 /// Where a server's tool calls run.
@@ -751,7 +751,7 @@ enum Route {
 }
 
 #[tool_router]
-impl ConcatAgentServer {
+impl PuppetCatAgentServer {
     /// Wraps `engine` with the tool router `rmcp` generates from the
     /// `#[tool]` methods below.
     pub fn new(engine: Arc<AgentEngine>) -> Self {
@@ -762,7 +762,7 @@ impl ConcatAgentServer {
         }
     }
 
-    /// Like [`ConcatAgentServer::new`], but a call goes to the running window
+    /// Like [`PuppetCatAgentServer::new`], but a call goes to the running window
     /// through `forwarder` when there is one and this server has no project
     /// open itself.
     pub fn forwarding(engine: Arc<AgentEngine>, forwarder: Arc<crate::bridge::Forwarder>) -> Self {
@@ -1769,7 +1769,7 @@ impl ConcatAgentServer {
 }
 
 #[tool_handler]
-impl ServerHandler for ConcatAgentServer {
+impl ServerHandler for PuppetCatAgentServer {
     async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,

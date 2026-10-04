@@ -129,7 +129,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|e| e["id"] == "concat.green-screen")
+            .find(|e| e["id"] == "puppetcat.green-screen")
             .expect("green screen is an effect");
         assert_eq!(green["params"][0]["key"], "similarity");
 

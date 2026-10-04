@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
 
-//! Command line driver for the Concat engine.
+//! Command line driver for the PuppetCat engine.
 //!
 //! This exists so the engine can be exercised end to end without a UI. The
 //! `render` command is the vertical slice: probe, build a timeline, plan every
@@ -17,7 +17,7 @@ use puppetcat_media::{EncodeOptions, Encoder, FrameSink, ReaderPool};
 use puppetcat_render::{Compositor, CpuCompositor, Layer, WgpuCompositor, plan_frame};
 
 #[derive(Parser)]
-#[command(name = "puppetcat-cli", version, about = "Concat engine command line")]
+#[command(name = "puppetcat-cli", version, about = "PuppetCat engine command line")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

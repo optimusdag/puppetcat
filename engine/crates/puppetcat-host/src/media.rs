@@ -87,7 +87,7 @@ impl MediaSummary {
     }
 }
 
-/// Extensions Concat is willing to treat as stills.
+/// Extensions PuppetCat is willing to treat as stills.
 const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "avif", "heic", "heif", "gif",
 ];

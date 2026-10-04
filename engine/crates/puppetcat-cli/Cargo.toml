@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Command line driver for the Concat engine."
+description = "Command line driver for the PuppetCat engine."
 
 # `puppetcat` is the editor window's binary; the driver gets the suffix.
 [[bin]]

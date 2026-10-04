@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use puppetcat_agent::AgentEngine;
-use puppetcat_agent::mcp::ConcatAgentServer;
+use puppetcat_agent::mcp::PuppetCatAgentServer;
 use rmcp::ServiceExt;
 use rmcp::transport::stdio;
 
@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A running PuppetCat window takes the tool calls itself, so edits show up
     // there live; with none running, they are handled here as ever.
     let forwarder = Arc::new(puppetcat_agent::bridge::Forwarder::new(&engine.dirs()));
-    let server = ConcatAgentServer::forwarding(engine, forwarder);
+    let server = PuppetCatAgentServer::forwarding(engine, forwarder);
 
     let service = server.serve(stdio()).await?;
     service.waiting().await?;

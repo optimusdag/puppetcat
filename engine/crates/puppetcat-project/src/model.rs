@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Jareer and Concat contributors
 
-//! The document model: what a Concat project *is*.
+//! The document model: what a PuppetCat project *is*.
 //!
 //! Times are `f64` seconds here because that is what the on-disk format
 //! stores, and the documents that exist freeze the format. The conversion

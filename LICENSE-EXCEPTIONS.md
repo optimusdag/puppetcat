@@ -72,20 +72,3 @@ version.
 Nothing here limits the permissions the AGPL already grants you, and nothing
 here is a licence to any patent beyond what AGPL-3.0-or-later section 11
 already provides.
-
----
-
-## Commercial licensing
-
-The AGPL's reciprocity is deliberate: if you build on PuppetCat's engine, the
-result stays open for the people who use it.
-
-If that does not fit your situation, and PuppetCat's contributor copyright is
-held centrally (all contributions are made under the CLA in [`CLA.md`](CLA.md)),
-a separate commercial licence can be granted without the AGPL's obligations.
-Enquiries: **optimusdag@gmail.com**.
-
-<!-- This offer only holds while PuppetCat actually operates a CLA that
-     centralises contributor copyright (see CLA.md). If contributions are
-     ever accepted without one, this paragraph should be removed or scoped
-     to code the maintainer wrote outright. -->

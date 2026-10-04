@@ -738,7 +738,7 @@ impl WavWriter {
 /// it dies or the default device changes.
 ///
 /// Setup failure is a retry with backoff, not a permanent return: a machine
-/// that boots Concat before its audio device is ready, or loses its only
+/// that boots PuppetCat before its audio device is ready, or loses its only
 /// device mid-session, gets sound back when the device does. A rebuilt
 /// stream is seeded from the shared clock and the last clip set, so playback
 /// carries straight on.

@@ -81,11 +81,11 @@ mod tests {
     #[test]
     fn a_filter_mixes_by_its_intensity_and_an_effect_does_not() {
         let catalogue = Catalogue::builtin();
-        let full = catalogue.video_chain(&[applied("concat.warm", &[])]);
+        let full = catalogue.video_chain(&[applied("puppetcat.warm", &[])]);
         assert_eq!(full, "colortemperature=temperature=4600");
         let half = catalogue.video_chain(&[
-            applied("concat.sepia", &[]),
-            applied("concat.warm", &[("intensity", 50.0)]),
+            applied("puppetcat.sepia", &[]),
+            applied("puppetcat.warm", &[("intensity", 50.0)]),
         ]);
         assert!(half.starts_with("colorchannelmixer"), "{half}");
         assert!(
@@ -95,7 +95,7 @@ mod tests {
             ),
             "{half}"
         );
-        let effect = catalogue.video_chain(&[applied("concat.sepia", &[("intensity", 50.0)])]);
+        let effect = catalogue.video_chain(&[applied("puppetcat.sepia", &[("intensity", 50.0)])]);
         assert!(!effect.contains("blend"), "{effect}");
     }
 
@@ -143,12 +143,17 @@ mod tests {
     fn built_in_ids_are_namespaced_and_bare_aliases_still_resolve() {
         let catalogue = Catalogue::builtin();
         for package in catalogue.packages() {
-            assert!(package.id().starts_with("concat."), "{}", package.id());
+            assert!(package.id().starts_with("puppetcat."), "{}", package.id());
         }
-        assert_eq!(catalogue.get("glow").map(Package::id), Some("concat.glow"));
+        assert_eq!(catalogue.get("glow").map(Package::id), Some("puppetcat.glow"));
+        assert_eq!(
+            catalogue.get("puppetcat.glow").map(Package::id),
+            Some("puppetcat.glow")
+        );
+        // Ids from before the rename still open.
         assert_eq!(
             catalogue.get("concat.glow").map(Package::id),
-            Some("concat.glow")
+            Some("puppetcat.glow")
         );
         assert!(catalogue.get("from-the-future").is_none());
     }

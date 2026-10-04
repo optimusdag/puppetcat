@@ -14,7 +14,7 @@
 
 use std::fmt;
 
-/// Bytes per pixel in the one format Concat uses.
+/// Bytes per pixel in the one format PuppetCat uses.
 pub const BYTES_PER_PIXEL: usize = 4;
 
 /// An RGBA8 image.

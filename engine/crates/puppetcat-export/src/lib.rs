@@ -252,7 +252,7 @@ pub struct ExportRange {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportRequest {
-    /// The file to write. Siblings named `.{stem}.concat-*` are used as
+    /// The file to write. Siblings named `.{stem}.puppetcat-*` are used as
     /// scratch during the render and removed afterwards - unless
     /// `scratch_dir` names somewhere else, in which case the render happens
     /// entirely there and only the finished file crosses to `output`.

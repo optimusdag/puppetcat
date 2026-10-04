@@ -27,7 +27,7 @@ echo
 if [ "$kind" = "nightly" ]; then
   echo "The newest main, rebuilt on every push. For a release, see the tagged ones."
 else
-  echo "A self-contained build for every platform Concat ships on."
+  echo "A self-contained build for every platform PuppetCat ships on."
 fi
 echo
 if [ -n "$changes" ]; then
@@ -47,21 +47,21 @@ cat <<'EOF'
 
 Every bundle runs with nothing else installed.
 
-- **macOS**: open the `.dmg` and drag Concat to Applications. If macOS says
+- **macOS**: open the `.dmg` and drag PuppetCat to Applications. If macOS says
   the app cannot be checked, right-click it and choose Open once.
-- **Windows**: unzip and run `concat.exe`. The FFmpeg libraries beside it
+- **Windows**: unzip and run `puppetcat.exe`. The FFmpeg libraries beside it
   stay beside it.
-- **Linux**: `tar xzf` the archive and run `./concat` from the folder;
-  `concat.desktop` is there for a launcher.
+- **Linux**: `tar xzf` the archive and run `./puppetcat` from the folder;
+  `puppetcat.desktop` is there for a launcher.
 
 `SHA256SUMS` lists each file's checksum.
 
 ### Licences
 
-Concat is AGPL-3.0-or-later with a plugin exception
-([LICENSE-EXCEPTIONS.md](https://github.com/jub0t/Concat/blob/main/LICENSE-EXCEPTIONS.md)).
+PuppetCat is AGPL-3.0-or-later with a plugin exception
+([LICENSE-EXCEPTIONS.md](https://github.com/optimusdag/puppetcat/blob/main/LICENSE-EXCEPTIONS.md)).
 The bundles carry FFmpeg (GPL, with x264), compile in whisper.cpp (MIT) and
 link sherpa-onnx with espeak-ng (GPL-3.0); Slint is used under its GPL-3.0
 option. Sources and licences:
-[THIRD_PARTY_NOTICES.md](https://github.com/jub0t/Concat/blob/main/THIRD_PARTY_NOTICES.md).
+[THIRD_PARTY_NOTICES.md](https://github.com/optimusdag/puppetcat/blob/main/THIRD_PARTY_NOTICES.md).
 EOF

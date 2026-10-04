@@ -320,7 +320,7 @@ mod tests {
 
     const GOOD: &str = r#"
         [effect]
-        id = "concat.blur"
+        id = "puppetcat.blur"
         name = "Blur"
         kind = "effect"
         category = "Blur"
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn a_good_manifest_parses() {
         let manifest = Manifest::parse(GOOD).expect("parses");
-        assert_eq!(manifest.effect.id, "concat.blur");
+        assert_eq!(manifest.effect.id, "puppetcat.blur");
         assert_eq!(manifest.effect.version, 1);
         assert_eq!(manifest.params[0].kind, ParamType::Float);
         assert_eq!(manifest.params[0].step, 0.0);
@@ -356,8 +356,8 @@ mod tests {
 
     #[test]
     fn bad_manifests_are_rejected_with_a_reason() {
-        rejects(&GOOD.replace("concat.blur", "blur"), "author.name");
-        rejects(&GOOD.replace("concat.blur", "Concat.Blur"), "author.name");
+        rejects(&GOOD.replace("puppetcat.blur", "blur"), "author.name");
+        rejects(&GOOD.replace("puppetcat.blur", "PuppetCat.Blur"), "author.name");
         rejects(
             &GOOD.replace("intensity = \"radius\"", "intensity = \"sigma\""),
             "intensity",

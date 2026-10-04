@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 PuppetCat contributors
 
-//! Audio facts for agents: loudness, silence/dead-air intervals and a
-//! deliberately labelled speech-vs-music heuristic. Decoding stays in the
-//! engine through `puppetcat-media`; no shelling out to ffmpeg or parsing its
-//! stderr.
+//! Facts about a project's media, and the edits they suggest: loudness,
+//! silence/dead-air intervals, a deliberately labelled speech-vs-music
+//! heuristic, and shot changes. The window and the agent both call these, so
+//! what a button does and what a tool does can never drift apart. Decoding
+//! stays in the engine through `puppetcat-media`; no shelling out to ffmpeg
+//! or parsing its stderr.
 
 #![allow(missing_docs)] // Serialized analysis fields are the public wire schema.
 
@@ -14,6 +16,8 @@ use puppetcat_core::time::{FrameRate, Rational};
 use puppetcat_media::{
     AudioDecoder, AudioOptions, DecodeOptions, Decoder, FrameSource, SampleFormat,
 };
+use puppetcat_project::model::{ClipKind, MediaKind};
+use puppetcat_project::{Command, Project};
 use serde::Serialize;
 
 const ANALYSIS_RATE: u32 = 16_000;
@@ -61,7 +65,7 @@ pub struct AudioAnalysis {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct FeatureBucket {
+pub struct FeatureBucket {
     pub start: f64,
     pub end: f64,
     pub rms: f64,
@@ -69,7 +73,7 @@ pub(crate) struct FeatureBucket {
     pub zcr: f64,
 }
 
-pub(crate) fn analyze_file(
+pub fn analyze_file(
     path: &Path,
     source_start: f64,
     duration: Option<f64>,
@@ -139,7 +143,7 @@ fn db(value: f64) -> f64 {
     }
 }
 
-pub(crate) fn summarize(
+pub fn summarize(
     target: String,
     origin: f64,
     features: Vec<FeatureBucket>,
@@ -290,7 +294,7 @@ const MAX_SCENE_RATE: f64 = 30.0;
 /// same. A cut closer than `min_scene` seconds to the previous one is
 /// ignored, which is what keeps a flash or a burst of motion from reading as
 /// a string of cuts.
-pub(crate) fn detect_scenes(
+pub fn detect_scenes(
     path: &Path,
     start: f64,
     end: Option<f64>,
@@ -369,16 +373,381 @@ fn cuts_from_scores(
     cuts
 }
 
+/// Analyses one bin item, one timeline clip, or the active timeline's
+/// audible mix. Times are source-local for a media item and timeline
+/// times for clip/timeline targets.
+#[allow(clippy::too_many_arguments)]
+pub fn analyze_audio(
+    project: &Project,
+    media_id: Option<String>,
+    clip_id: Option<String>,
+    start: Option<f64>,
+    end: Option<f64>,
+    bucket_seconds: f64,
+    silence_threshold_db: f64,
+    min_silence: f64,
+    include_buckets: bool,
+) -> Result<AudioAnalysis, String> {
+    if media_id.is_some() && clip_id.is_some() {
+        return Err("choose mediaId or clipId, not both".to_owned());
+    }
+
+    #[derive(Clone)]
+    struct Source {
+        path: String,
+        source_start: f64,
+        source_duration: f64,
+        timeline_start: f64,
+        speed: f64,
+        volume: f64,
+        has_filters: bool,
+        curved_speed: bool,
+    }
+
+    let (target, origin, target_end, sources) = {
+        let timeline = project.active();
+        if let Some(id) = media_id {
+            let media = project
+                .media_by_id(&id)
+                .ok_or_else(|| format!("media {id:?} is not in the bin"))?;
+            if !media.has_audio {
+                return Err(format!("media {id:?} has no audio stream"));
+            }
+            let origin = start.unwrap_or(0.0).max(0.0);
+            let target_end = end.or(media.duration).unwrap_or(origin).max(origin);
+            (
+                format!("media:{id}"),
+                origin,
+                target_end,
+                vec![Source {
+                    path: media.path.clone(),
+                    source_start: origin,
+                    source_duration: target_end - origin,
+                    timeline_start: origin,
+                    speed: 1.0,
+                    volume: 1.0,
+                    has_filters: false,
+                    curved_speed: false,
+                }],
+            )
+        } else if let Some(id) = clip_id {
+            let clip = timeline
+                .clip(&id)
+                .ok_or_else(|| format!("clip {id:?} is not on the active timeline"))?;
+            let media = project
+                .media_by_id(&clip.media_id)
+                .ok_or_else(|| format!("clip {id:?} has no media"))?;
+            if !media.has_audio || clip.muted == Some(true) {
+                return Err(format!("clip {id:?} has no audible stream"));
+            }
+            let origin = start.unwrap_or(clip.start).max(clip.start);
+            let target_end = end
+                .unwrap_or(clip.start + clip.duration)
+                .min(clip.start + clip.duration)
+                .max(origin);
+            let speed = clip.speed.max(0.0625);
+            (
+                format!("clip:{id}"),
+                origin,
+                target_end,
+                vec![Source {
+                    path: media.path.clone(),
+                    source_start: clip.source_start + (origin - clip.start) * speed,
+                    source_duration: (target_end - origin) * speed,
+                    timeline_start: origin,
+                    speed,
+                    volume: clip.volume,
+                    has_filters: !clip.filters.is_empty(),
+                    curved_speed: clip.speed_curve.is_some(),
+                }],
+            )
+        } else {
+            let origin = start.unwrap_or(0.0).max(0.0);
+            let target_end = end.unwrap_or_else(|| timeline.duration()).max(origin);
+            let mut sources = Vec::new();
+            for clip in &timeline.clips {
+                if !matches!(clip.kind, ClipKind::Video | ClipKind::Audio) {
+                    continue;
+                }
+                let Some(track) = timeline.track(&clip.track_id) else {
+                    continue;
+                };
+                let Some(media) = project.media_by_id(&clip.media_id) else {
+                    continue;
+                };
+                if track.muted || clip.muted == Some(true) || !media.has_audio {
+                    continue;
+                }
+                let from = clip.start.max(origin);
+                let to = (clip.start + clip.duration).min(target_end);
+                if to <= from {
+                    continue;
+                }
+                let speed = clip.speed.max(0.0625);
+                sources.push(Source {
+                    path: media.path.clone(),
+                    source_start: clip.source_start + (from - clip.start) * speed,
+                    source_duration: (to - from) * speed,
+                    timeline_start: from,
+                    speed,
+                    volume: clip.volume,
+                    has_filters: !clip.filters.is_empty(),
+                    curved_speed: clip.speed_curve.is_some(),
+                });
+            }
+            ("timeline:active".to_owned(), origin, target_end, sources)
+        }
+    };
+
+    let count = ((target_end - origin) / bucket_seconds.max(0.02)).ceil() as usize;
+    let count = count.max(1);
+    let mut power = vec![0.0f64; count];
+    let mut peak = vec![0.0f64; count];
+    let mut zcr_power = vec![0.0f64; count];
+    let mut warnings = Vec::new();
+    for source in sources {
+        if source.has_filters {
+            warnings.push(format!(
+                "{} has audio filters; analysis uses the decoded source before those filters",
+                source.path
+            ));
+        }
+        if source.curved_speed {
+            warnings.push(format!(
+                "{} has a speed curve; analysis maps it using the clip's mean speed",
+                source.path
+            ));
+        }
+        let decoded = analyze_file(
+            Path::new(&source.path),
+            source.source_start,
+            Some(source.source_duration),
+            bucket_seconds * source.speed,
+        )?;
+        for bucket in decoded {
+            let at = source.timeline_start + bucket.start / source.speed;
+            if at < origin || at >= target_end {
+                continue;
+            }
+            let index = ((at - origin) / bucket_seconds.max(0.02)).floor() as usize;
+            if index >= count {
+                continue;
+            }
+            let contribution = bucket.rms * source.volume.max(0.0);
+            let squared = contribution * contribution;
+            power[index] += squared;
+            peak[index] = peak[index].max(bucket.peak * source.volume.max(0.0));
+            zcr_power[index] += bucket.zcr * squared;
+        }
+    }
+    let width = bucket_seconds.clamp(0.02, 2.0);
+    let features: Vec<FeatureBucket> = (0..count)
+        .map(|index| {
+            let start = index as f64 * width;
+            let end = ((index + 1) as f64 * width).min(target_end - origin);
+            FeatureBucket {
+                start,
+                end,
+                rms: power[index].sqrt().min(1.0),
+                peak: peak[index].min(1.0),
+                zcr: if power[index] > 0.0 {
+                    zcr_power[index] / power[index]
+                } else {
+                    0.0
+                },
+            }
+        })
+        .collect();
+    warnings.sort();
+    warnings.dedup();
+    Ok(summarize(
+        target,
+        origin,
+        features,
+        width,
+        silence_threshold_db,
+        min_silence,
+        include_buckets,
+        warnings,
+    ))
+}
+
+/// What a silence scan found, and the cuts it proposes.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SilenceScan {
+    /// The spans to cut, latest first, in timeline seconds before any cut.
+    pub cuts: Vec<AudioInterval>,
+    /// Total seconds those spans cover.
+    pub removed_seconds: f64,
+    /// Caveats from the analysis, e.g. clips whose filters it ignored.
+    pub warnings: Vec<String>,
+}
+
+/// Finds the silence worth cutting in the active timeline's audible mix, or in
+/// one clip's stretch of it: analyses the audio, then shrinks every silent
+/// run by `padding` so speech keeps a breath of room. Whatever has no sound
+/// under it counts as silent, so a picture-only stretch is found too - scope
+/// it with `clip_id` or a time range.
+pub fn scan_silence(
+    project: &Project,
+    clip_id: Option<String>,
+    start: Option<f64>,
+    end: Option<f64>,
+    silence_threshold_db: f64,
+    min_silence: f64,
+    padding: f64,
+) -> Result<SilenceScan, String> {
+    let analysis = analyze_audio(
+        project,
+        None,
+        clip_id,
+        start,
+        end,
+        0.05,
+        silence_threshold_db,
+        min_silence,
+        false,
+    )?;
+    let cuts = silence_cuts(&analysis.silence, padding, 0.05);
+    Ok(SilenceScan {
+        removed_seconds: cuts.iter().map(|cut| cut.duration).sum(),
+        cuts,
+        warnings: analysis.warnings,
+    })
+}
+
+/// The edit that removes these cuts: one `rippleDeleteRange` each, on the
+/// named lanes or on every lane when `track_ids` is empty. Apply them in the
+/// order given - latest first - as one transaction.
+pub fn silence_commands(cuts: &[AudioInterval], track_ids: &[String]) -> Vec<Command> {
+    cuts.iter()
+        .map(|cut| Command::RippleDeleteRange {
+            start: cut.start,
+            end: cut.end,
+            track_ids: track_ids.to_vec(),
+            marker_policy: Default::default(),
+        })
+        .collect()
+}
+
+/// Where a scene scan looks: its label, the file, the source span, and how
+/// source seconds become the seconds the caller wants.
+type SceneTarget = (String, String, f64, Option<f64>, Box<dyn Fn(f64) -> f64>);
+
+/// What a scene scan found.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneScan {
+    /// What was analysed: `media:<id>` or `clip:<id>`.
+    pub target: String,
+    /// The cuts, earliest first: source seconds for a media item, timeline
+    /// seconds for a clip.
+    pub cuts: Vec<SceneCut>,
+    /// Caveats, e.g. a speed curve the mapping ignores.
+    pub warnings: Vec<String>,
+}
+
+/// Finds the cuts in a bin item's video, or in the stretch of it one
+/// timeline clip shows, by comparing consecutive frames.
+pub fn scan_scenes(
+    project: &Project,
+    media_id: Option<String>,
+    clip_id: Option<String>,
+    start: Option<f64>,
+    end: Option<f64>,
+    threshold: f64,
+    min_scene: f64,
+) -> Result<SceneScan, String> {
+    let mut warnings = Vec::new();
+    let (label, path, source_start, source_end, to_target): SceneTarget = match (media_id, clip_id)
+    {
+        (Some(_), Some(_)) => return Err("choose mediaId or clipId, not both".to_owned()),
+        (Some(id), None) => {
+            let media = project
+                .media_by_id(&id)
+                .ok_or_else(|| format!("media {id:?} is not in the bin"))?;
+            if matches!(media.kind, MediaKind::Audio) {
+                return Err(format!("media {id:?} has no picture"));
+            }
+            (
+                format!("media:{id}"),
+                media.path.clone(),
+                start.unwrap_or(0.0).max(0.0),
+                end.or(media.duration),
+                Box::new(|time| time),
+            )
+        }
+        (None, Some(id)) => {
+            let clip = project
+                .active()
+                .clip(&id)
+                .ok_or_else(|| format!("clip {id:?} is not on the active timeline"))?;
+            if !matches!(clip.kind, ClipKind::Video) {
+                return Err(format!("clip {id:?} is not a video clip"));
+            }
+            let media = project
+                .media_by_id(&clip.media_id)
+                .ok_or_else(|| format!("clip {id:?} has no media"))?;
+            if clip.speed_curve.is_some() || clip.reverse {
+                warnings.push(
+                    "the clip has a speed curve or plays in reverse; cut times use its mean speed"
+                        .to_owned(),
+                );
+            }
+            let speed = clip.speed.max(0.0625);
+            let (clip_start, clip_end, clip_source) =
+                (clip.start, clip.start + clip.duration, clip.source_start);
+            let from = start.unwrap_or(clip_start).clamp(clip_start, clip_end);
+            let to = end.unwrap_or(clip_end).clamp(from, clip_end);
+            (
+                format!("clip:{id}"),
+                media.path.clone(),
+                clip_source + (from - clip_start) * speed,
+                Some(clip_source + (to - clip_start) * speed),
+                Box::new(move |time| clip_start + (time - clip_source) / speed),
+            )
+        }
+        (None, None) => return Err("give a mediaId or a clipId".to_owned()),
+    };
+    let cuts = detect_scenes(
+        Path::new(&path),
+        source_start,
+        source_end,
+        threshold,
+        min_scene,
+    )?
+    .into_iter()
+    .map(|cut| SceneCut {
+        time: to_target(cut.time),
+        score: cut.score,
+    })
+    .collect();
+    Ok(SceneScan {
+        target: label,
+        cuts,
+        warnings,
+    })
+}
+
+/// The edit that drops a "Cut N" marker at each of a clip's cuts.
+pub fn marker_commands(cuts: &[SceneCut]) -> Vec<Command> {
+    cuts.iter()
+        .enumerate()
+        .map(|(index, cut)| Command::AddMarker {
+            time: cut.time,
+            name: Some(format!("Cut {}", index + 1)),
+            clip_id: None,
+        })
+        .collect()
+}
+
 /// The spans worth cutting for a set of silent intervals: each shrunk by
 /// `padding` seconds at both ends, so speech keeps a breath of room, with the
 /// ones left under `minimum` seconds dropped. Latest first, which is the
 /// order to cut in: a ripple only moves what comes after it, so earlier
 /// times stay where the analysis found them.
-pub(crate) fn silence_cuts(
-    silence: &[AudioInterval],
-    padding: f64,
-    minimum: f64,
-) -> Vec<AudioInterval> {
+pub fn silence_cuts(silence: &[AudioInterval], padding: f64, minimum: f64) -> Vec<AudioInterval> {
     let padding = padding.max(0.0);
     let mut cuts: Vec<AudioInterval> = silence
         .iter()

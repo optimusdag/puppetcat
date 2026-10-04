@@ -23,9 +23,9 @@ pub use batch::{BatchPlan, BatchRangeArg, BatchRequest};
 pub use layouts::{ApplyLayoutReport, ClipSelector, LayoutValues};
 pub use lifecycle::{MoveOutputReport, RelinkEntry, RelinkReport};
 
-use crate::analysis::{self, AudioAnalysis, FeatureBucket};
 use crate::export::{ExportJob, ExportStatus};
 use crate::query::{self, TimelineSummary, ValidationReport};
+use puppetcat_host::analysis::{self, AudioAnalysis};
 
 /// What `apply_edit_plan` reports: enough to confirm a plan did what was
 /// meant without re-reading the project.
@@ -204,6 +204,14 @@ pub struct SceneDetection {
     pub markers_added: usize,
     /// Caveats, e.g. a speed curve the mapping ignores.
     pub warnings: Vec<String>,
+}
+
+/// Commands as the JSON operations an edit plan takes.
+fn commands_as_operations(commands: &[Command]) -> Vec<serde_json::Value> {
+    commands
+        .iter()
+        .map(|command| serde_json::to_value(command).expect("commands serialise"))
+        .collect()
 }
 
 /// Replaces every string equal to `$name` with the id that reference
@@ -688,6 +696,13 @@ impl AgentEngine {
         Ok(session.view())
     }
 
+    /// A copy of the open project, so analysis can decode media without
+    /// holding the session lock.
+    fn project_snapshot(&self) -> Result<puppetcat_project::Project, String> {
+        let guard = self.session_lock();
+        Ok(guard.as_ref().ok_or_else(no_project)?.project().clone())
+    }
+
     /// Analyses one bin item, one timeline clip, or the active timeline's
     /// audible mix. Times are source-local for a media item and timeline
     /// times for clip/timeline targets.
@@ -703,191 +718,17 @@ impl AgentEngine {
         min_silence: f64,
         include_buckets: bool,
     ) -> Result<AudioAnalysis, String> {
-        if media_id.is_some() && clip_id.is_some() {
-            return Err("choose mediaId or clipId, not both".to_owned());
-        }
-
-        #[derive(Clone)]
-        struct Source {
-            path: String,
-            source_start: f64,
-            source_duration: f64,
-            timeline_start: f64,
-            speed: f64,
-            volume: f64,
-            has_filters: bool,
-            curved_speed: bool,
-        }
-
-        let (target, origin, target_end, sources) = {
-            let guard = self.session_lock();
-            let session = guard.as_ref().ok_or_else(no_project)?;
-            let project = session.project();
-            let timeline = project.active();
-            if let Some(id) = media_id {
-                let media = project
-                    .media_by_id(&id)
-                    .ok_or_else(|| format!("media {id:?} is not in the bin"))?;
-                if !media.has_audio {
-                    return Err(format!("media {id:?} has no audio stream"));
-                }
-                let origin = start.unwrap_or(0.0).max(0.0);
-                let target_end = end.or(media.duration).unwrap_or(origin).max(origin);
-                (
-                    format!("media:{id}"),
-                    origin,
-                    target_end,
-                    vec![Source {
-                        path: media.path.clone(),
-                        source_start: origin,
-                        source_duration: target_end - origin,
-                        timeline_start: origin,
-                        speed: 1.0,
-                        volume: 1.0,
-                        has_filters: false,
-                        curved_speed: false,
-                    }],
-                )
-            } else if let Some(id) = clip_id {
-                let clip = timeline
-                    .clip(&id)
-                    .ok_or_else(|| format!("clip {id:?} is not on the active timeline"))?;
-                let media = project
-                    .media_by_id(&clip.media_id)
-                    .ok_or_else(|| format!("clip {id:?} has no media"))?;
-                if !media.has_audio || clip.muted == Some(true) {
-                    return Err(format!("clip {id:?} has no audible stream"));
-                }
-                let origin = start.unwrap_or(clip.start).max(clip.start);
-                let target_end = end
-                    .unwrap_or(clip.start + clip.duration)
-                    .min(clip.start + clip.duration)
-                    .max(origin);
-                let speed = clip.speed.max(0.0625);
-                (
-                    format!("clip:{id}"),
-                    origin,
-                    target_end,
-                    vec![Source {
-                        path: media.path.clone(),
-                        source_start: clip.source_start + (origin - clip.start) * speed,
-                        source_duration: (target_end - origin) * speed,
-                        timeline_start: origin,
-                        speed,
-                        volume: clip.volume,
-                        has_filters: !clip.filters.is_empty(),
-                        curved_speed: clip.speed_curve.is_some(),
-                    }],
-                )
-            } else {
-                let origin = start.unwrap_or(0.0).max(0.0);
-                let target_end = end.unwrap_or_else(|| timeline.duration()).max(origin);
-                let mut sources = Vec::new();
-                for clip in &timeline.clips {
-                    if !matches!(clip.kind, ClipKind::Video | ClipKind::Audio) {
-                        continue;
-                    }
-                    let Some(track) = timeline.track(&clip.track_id) else {
-                        continue;
-                    };
-                    let Some(media) = project.media_by_id(&clip.media_id) else {
-                        continue;
-                    };
-                    if track.muted || clip.muted == Some(true) || !media.has_audio {
-                        continue;
-                    }
-                    let from = clip.start.max(origin);
-                    let to = (clip.start + clip.duration).min(target_end);
-                    if to <= from {
-                        continue;
-                    }
-                    let speed = clip.speed.max(0.0625);
-                    sources.push(Source {
-                        path: media.path.clone(),
-                        source_start: clip.source_start + (from - clip.start) * speed,
-                        source_duration: (to - from) * speed,
-                        timeline_start: from,
-                        speed,
-                        volume: clip.volume,
-                        has_filters: !clip.filters.is_empty(),
-                        curved_speed: clip.speed_curve.is_some(),
-                    });
-                }
-                ("timeline:active".to_owned(), origin, target_end, sources)
-            }
-        };
-
-        let count = ((target_end - origin) / bucket_seconds.max(0.02)).ceil() as usize;
-        let count = count.max(1);
-        let mut power = vec![0.0f64; count];
-        let mut peak = vec![0.0f64; count];
-        let mut zcr_power = vec![0.0f64; count];
-        let mut warnings = Vec::new();
-        for source in sources {
-            if source.has_filters {
-                warnings.push(format!(
-                    "{} has audio filters; analysis uses the decoded source before those filters",
-                    source.path
-                ));
-            }
-            if source.curved_speed {
-                warnings.push(format!(
-                    "{} has a speed curve; analysis maps it using the clip's mean speed",
-                    source.path
-                ));
-            }
-            let decoded = analysis::analyze_file(
-                Path::new(&source.path),
-                source.source_start,
-                Some(source.source_duration),
-                bucket_seconds * source.speed,
-            )?;
-            for bucket in decoded {
-                let at = source.timeline_start + bucket.start / source.speed;
-                if at < origin || at >= target_end {
-                    continue;
-                }
-                let index = ((at - origin) / bucket_seconds.max(0.02)).floor() as usize;
-                if index >= count {
-                    continue;
-                }
-                let contribution = bucket.rms * source.volume.max(0.0);
-                let squared = contribution * contribution;
-                power[index] += squared;
-                peak[index] = peak[index].max(bucket.peak * source.volume.max(0.0));
-                zcr_power[index] += bucket.zcr * squared;
-            }
-        }
-        let width = bucket_seconds.clamp(0.02, 2.0);
-        let features: Vec<FeatureBucket> = (0..count)
-            .map(|index| {
-                let start = index as f64 * width;
-                let end = ((index + 1) as f64 * width).min(target_end - origin);
-                FeatureBucket {
-                    start,
-                    end,
-                    rms: power[index].sqrt().min(1.0),
-                    peak: peak[index].min(1.0),
-                    zcr: if power[index] > 0.0 {
-                        zcr_power[index] / power[index]
-                    } else {
-                        0.0
-                    },
-                }
-            })
-            .collect();
-        warnings.sort();
-        warnings.dedup();
-        Ok(analysis::summarize(
-            target,
-            origin,
-            features,
-            width,
+        analysis::analyze_audio(
+            &self.project_snapshot()?,
+            media_id,
+            clip_id,
+            start,
+            end,
+            bucket_seconds,
             silence_threshold_db,
             min_silence,
             include_buckets,
-            warnings,
-        ))
+        )
     }
 
     /// Finds the cuts in a bin item's video, or in the stretch of it one
@@ -906,107 +747,34 @@ impl AgentEngine {
         min_scene: f64,
         add_markers: bool,
     ) -> Result<SceneDetection, String> {
-        struct Target {
-            label: String,
-            path: String,
-            source_start: f64,
-            source_end: Option<f64>,
-            /// Source seconds to target seconds.
-            to_target: Box<dyn Fn(f64) -> f64 + Send>,
-        }
-        let mut warnings = Vec::new();
-        let target = {
-            let guard = self.session_lock();
-            let session = guard.as_ref().ok_or_else(no_project)?;
-            let project = session.project();
-            match (media_id, clip_id) {
-                (Some(_), Some(_)) => return Err("choose mediaId or clipId, not both".to_owned()),
-                (Some(id), None) => {
-                    let media = project
-                        .media_by_id(&id)
-                        .ok_or_else(|| format!("media {id:?} is not in the bin"))?;
-                    if matches!(media.kind, puppetcat_project::model::MediaKind::Audio) {
-                        return Err(format!("media {id:?} has no picture"));
-                    }
-                    Target {
-                        label: format!("media:{id}"),
-                        path: media.path.clone(),
-                        source_start: start.unwrap_or(0.0).max(0.0),
-                        source_end: end.or(media.duration),
-                        to_target: Box::new(|time| time),
-                    }
-                }
-                (None, Some(id)) => {
-                    let clip = project
-                        .active()
-                        .clip(&id)
-                        .ok_or_else(|| format!("clip {id:?} is not on the active timeline"))?;
-                    if !matches!(clip.kind, ClipKind::Video) {
-                        return Err(format!("clip {id:?} is not a video clip"));
-                    }
-                    let media = project
-                        .media_by_id(&clip.media_id)
-                        .ok_or_else(|| format!("clip {id:?} has no media"))?;
-                    if clip.speed_curve.is_some() || clip.reverse {
-                        warnings.push(
-                            "the clip has a speed curve or plays in reverse; cut times use its mean speed"
-                                .to_owned(),
-                        );
-                    }
-                    let speed = clip.speed.max(0.0625);
-                    let (clip_start, clip_end, source_start) =
-                        (clip.start, clip.start + clip.duration, clip.source_start);
-                    let from = start.unwrap_or(clip_start).clamp(clip_start, clip_end);
-                    let to = end.unwrap_or(clip_end).clamp(from, clip_end);
-                    Target {
-                        label: format!("clip:{id}"),
-                        path: media.path.clone(),
-                        source_start: source_start + (from - clip_start) * speed,
-                        source_end: Some(source_start + (to - clip_start) * speed),
-                        to_target: Box::new(move |time| clip_start + (time - source_start) / speed),
-                    }
-                }
-                (None, None) => return Err("give a mediaId or a clipId".to_owned()),
-            }
-        };
-        if add_markers && !target.label.starts_with("clip:") {
+        if add_markers && clip_id.is_none() {
             return Err("addMarkers needs a clipId: markers live on the timeline".to_owned());
         }
         let revision = self.get_state()?.revision;
-        let cuts: Vec<analysis::SceneCut> = analysis::detect_scenes(
-            Path::new(&target.path),
-            target.source_start,
-            target.source_end,
+        let scan = analysis::scan_scenes(
+            &self.project_snapshot()?,
+            media_id,
+            clip_id,
+            start,
+            end,
             threshold,
             min_scene,
-        )?
-        .into_iter()
-        .map(|cut| analysis::SceneCut {
-            time: (target.to_target)(cut.time),
-            score: cut.score,
-        })
-        .collect();
+        )?;
         let mut markers_added = 0;
-        if add_markers && !cuts.is_empty() {
-            let operations = cuts
-                .iter()
-                .enumerate()
-                .map(|(index, cut)| {
-                    serde_json::json!({
-                        "op": "addMarker",
-                        "time": cut.time,
-                        "name": format!("Cut {}", index + 1),
-                    })
-                })
-                .collect();
-            self.apply_edit_plan(revision, operations, false, true)?;
-            markers_added = cuts.len();
+        if add_markers && !scan.cuts.is_empty() {
+            self.apply_edit_plan(
+                revision,
+                commands_as_operations(&analysis::marker_commands(&scan.cuts)),
+                false,
+                true,
+            )?;
+            markers_added = scan.cuts.len();
         }
         Ok(SceneDetection {
-            target: target.label,
-            cuts,
+            target: scan.target,
+            cuts: scan.cuts,
             markers_added,
-            warnings,
+            warnings: scan.warnings,
         })
     }
 
@@ -1031,38 +799,30 @@ impl AgentEngine {
         dry_run: bool,
     ) -> Result<SilenceRemoval, String> {
         let revision = self.get_state()?.revision;
-        let analysis = self.analyze_audio(
-            None,
+        let scan = analysis::scan_silence(
+            &self.project_snapshot()?,
             clip_id,
             start,
             end,
-            0.05,
             silence_threshold_db,
             min_silence,
-            false,
+            padding,
         )?;
-        let cuts = analysis::silence_cuts(&analysis.silence, padding, 0.05);
-        let removed_seconds = cuts.iter().map(|cut| cut.duration).sum();
-        let plan = if cuts.is_empty() {
+        let plan = if scan.cuts.is_empty() {
             None
         } else {
-            let operations = cuts
-                .iter()
-                .map(|cut| {
-                    serde_json::json!({
-                        "op": "rippleDeleteRange",
-                        "start": cut.start,
-                        "end": cut.end,
-                        "trackIds": track_ids,
-                    })
-                })
-                .collect();
-            Some(self.apply_edit_plan(revision, operations, dry_run, true)?)
+            let commands = analysis::silence_commands(&scan.cuts, &track_ids);
+            Some(self.apply_edit_plan(
+                revision,
+                commands_as_operations(&commands),
+                dry_run,
+                true,
+            )?)
         };
         Ok(SilenceRemoval {
-            cuts,
-            removed_seconds,
-            warnings: analysis.warnings,
+            cuts: scan.cuts,
+            removed_seconds: scan.removed_seconds,
+            warnings: scan.warnings,
             plan,
         })
     }

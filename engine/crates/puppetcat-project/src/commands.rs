@@ -501,6 +501,24 @@ pub enum Command {
         #[serde(default)]
         marker_policy: MarkerPolicy,
     },
+    /// Cuts a span of time out of the timeline and closes it up: every clip
+    /// is split at both edges, what falls inside is deleted, and what comes
+    /// after moves earlier by the span. The one primitive behind removing
+    /// dead air, filler words and unwanted takes - a ripple delete of a
+    /// *time range* rather than of named clips. One edit.
+    RippleDeleteRange {
+        /// Where the cut begins, in timeline seconds.
+        start: f64,
+        /// Where it ends.
+        end: f64,
+        /// The lanes to cut; empty cuts every lane and closes up all of
+        /// them, so sound and picture stay in step.
+        #[serde(default)]
+        track_ids: Vec<String>,
+        /// What free markers do; attached ones ride with their clips.
+        #[serde(default)]
+        marker_policy: MarkerPolicy,
+    },
     /// Trims a clip and moves everything after it by the change in length,
     /// so no gap opens and no overlap forms. Trimming the head keeps the
     /// clip where it started rather than sliding it forward. Policies are
@@ -2179,6 +2197,118 @@ fn apply_command(
             Ok(Outcome {
                 created_id: None,
                 applied: true,
+            })
+        }
+
+        Command::RippleDeleteRange {
+            start,
+            end,
+            track_ids,
+            marker_policy,
+        } => {
+            let start = start.max(0.0);
+            let length = end - start;
+            if !length.is_finite() || length <= MIN_CLIP_DURATION {
+                return Ok(Outcome::default());
+            }
+            let targeted =
+                |track_id: &str| track_ids.is_empty() || track_ids.iter().any(|id| id == track_id);
+
+            // Split at the far edge first, so the id that stays behind keeps
+            // the head and the one minted is what comes after the cut.
+            let mut after: HashMap<String, String> = HashMap::new();
+            let mut applied = false;
+            for time in [end, start] {
+                let straddling: Vec<String> = project
+                    .active()
+                    .clips
+                    .iter()
+                    .filter(|clip| {
+                        targeted(&clip.track_id)
+                            && clip.start < time - MIN_CLIP_DURATION
+                            && clip.start + clip.duration > time + MIN_CLIP_DURATION
+                    })
+                    .map(|clip| clip.id.clone())
+                    .collect();
+                for id in straddling {
+                    let outcome = apply_command(
+                        project,
+                        mint,
+                        Command::SplitClips {
+                            clip_ids: vec![id.clone()],
+                            time,
+                        },
+                    )?;
+                    applied |= outcome.applied;
+                    if let (true, Some(tail)) = (time == end, outcome.created_id) {
+                        after.insert(id, tail);
+                    }
+                }
+            }
+            // A split clones its piece, so the audio that follows a video
+            // clip across the cut would still name the video *before* it as
+            // its parent. Point each such piece at its own picture.
+            let pieces: HashSet<String> = after.values().cloned().collect();
+            for clip in &mut project.active_mut().clips {
+                if !pieces.contains(&clip.id) {
+                    continue;
+                }
+                if let Some(tail) = clip
+                    .detached_from
+                    .as_ref()
+                    .and_then(|parent| after.get(parent))
+                {
+                    clip.detached_from = Some(tail.clone());
+                }
+            }
+
+            let doomed: Vec<String> = project
+                .active()
+                .clips
+                .iter()
+                .filter(|clip| {
+                    targeted(&clip.track_id)
+                        && clip.start >= start - MIN_CLIP_DURATION
+                        && clip.start + clip.duration <= end + MIN_CLIP_DURATION
+                })
+                .map(|clip| clip.id.clone())
+                .collect();
+            if !doomed.is_empty() {
+                applied |= apply_command(
+                    project,
+                    mint,
+                    Command::RippleDelete {
+                        clip_ids: doomed,
+                        ripple_policy: RipplePolicy::None,
+                        link_policy: LinkPolicy::Explicit,
+                        marker_policy: MarkerPolicy::AttachedOnly,
+                    },
+                )?
+                .applied;
+            }
+
+            // Close the span by its full length, not by what the deleted
+            // clips happened to cover: a stretch with nothing on any lane
+            // is still part of the cut.
+            let timeline = project.active_mut();
+            for clip in &mut timeline.clips {
+                if targeted(&clip.track_id) && clip.start >= end - MIN_CLIP_DURATION {
+                    clip.start = (clip.start - length).max(0.0);
+                    applied = true;
+                }
+            }
+            if marker_policy == MarkerPolicy::ShiftFree {
+                for marker in timeline.markers.iter_mut().filter(|m| m.clip_id.is_none()) {
+                    if marker.time >= end {
+                        marker.time -= length;
+                    } else if marker.time > start {
+                        marker.time = start;
+                    }
+                }
+            }
+            Ok(Outcome {
+                created_id: None,
+                applied,
             })
         }
 

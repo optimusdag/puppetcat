@@ -265,9 +265,52 @@ fn push_silence(out: &mut Vec<AudioInterval>, start: f64, end: f64, minimum: f64
     }
 }
 
+/// The spans worth cutting for a set of silent intervals: each shrunk by
+/// `padding` seconds at both ends, so speech keeps a breath of room, with the
+/// ones left under `minimum` seconds dropped. Latest first, which is the
+/// order to cut in: a ripple only moves what comes after it, so earlier
+/// times stay where the analysis found them.
+pub(crate) fn silence_cuts(
+    silence: &[AudioInterval],
+    padding: f64,
+    minimum: f64,
+) -> Vec<AudioInterval> {
+    let padding = padding.max(0.0);
+    let mut cuts: Vec<AudioInterval> = silence
+        .iter()
+        .filter_map(|interval| {
+            let start = interval.start + padding;
+            let end = interval.end - padding;
+            (end - start >= minimum.max(0.05)).then_some(AudioInterval {
+                start,
+                end,
+                duration: end - start,
+            })
+        })
+        .collect();
+    cuts.sort_by(|a, b| b.start.total_cmp(&a.start));
+    cuts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cuts_keep_padding_drop_short_remnants_and_run_latest_first() {
+        let silence = |start: f64, end: f64| AudioInterval {
+            start,
+            end,
+            duration: end - start,
+        };
+        let cuts = silence_cuts(
+            &[silence(1.0, 3.0), silence(5.0, 5.4), silence(8.0, 10.0)],
+            0.25,
+            0.3,
+        );
+        let spans: Vec<(f64, f64)> = cuts.iter().map(|c| (c.start, c.end)).collect();
+        assert_eq!(spans, vec![(8.25, 9.75), (1.25, 2.75)]);
+    }
 
     #[test]
     fn silence_runs_are_merged_and_short_runs_are_ignored() {

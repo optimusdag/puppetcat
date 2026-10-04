@@ -129,6 +129,30 @@ pub struct AnalyzeAudioParams {
     pub include_buckets: Option<bool>,
 }
 
+/// Parameters for `remove_silence`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveSilenceParams {
+    /// Only look at this active-timeline clip's stretch of the timeline.
+    /// Omit to analyse the whole audible mix.
+    pub clip_id: Option<String>,
+    /// Beginning of the stretch to clean, in timeline seconds.
+    pub start: Option<f64>,
+    /// End of the stretch, in timeline seconds.
+    pub end: Option<f64>,
+    /// Audio at or below this RMS dBFS is silence. Defaults to -35.
+    pub silence_threshold_db: Option<f64>,
+    /// Only silences at least this many seconds long are cut. Defaults to 0.5.
+    pub min_silence: Option<f64>,
+    /// Seconds of silence kept at each side of a cut, so speech is not
+    /// clipped. Defaults to 0.1.
+    pub padding: Option<f64>,
+    /// Lanes to cut. Empty or omitted cuts every lane together.
+    pub track_ids: Option<Vec<String>>,
+    /// Report what would be cut and commit nothing. Default false.
+    pub dry_run: Option<bool>,
+}
+
 /// Filters and inclusion controls for a compact timeline summary.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -638,6 +662,8 @@ impl ConcatAgentServer {
                 "rippleTrim": true,
                 "rippleInsert": true,
                 "insertGap": true,
+                "rippleDeleteRange": true,
+                "removeSilence": true,
                 "batchExport": true,
                 "layoutTemplates": true,
                 "mediaRelink": true,
@@ -748,6 +774,35 @@ impl ConcatAgentServer {
         })
         .await
         .map_err(|error| to_mcp_err(format!("audio analysis task panicked: {error}")))?
+        .map_err(to_mcp_err)?;
+        ok_json(&result)
+    }
+
+    #[tool(
+        description = "Remove silence from the active timeline in one undoable edit. Analyses the audible mix (or one clip's stretch via `clipId`, or a `start`/`end` range), shrinks each silent run by `padding` so speech keeps room, and ripple-deletes the rest across every lane so picture, sound and linked audio stay in sync; free markers shift. Anything with no sound under it counts as silent, so scope picture-only stretches out with `clipId`, `start`/`end` or `trackIds`. Use `dryRun` first: returns the cuts, total seconds removed and the plan diff. Built on the `rippleDeleteRange` {start, end, trackIds, markerPolicy} edit-plan op, which cuts any span of time."
+    )]
+    async fn remove_silence(
+        &self,
+        Parameters(params): Parameters<RemoveSilenceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let engine = self.engine.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            engine.remove_silence(
+                params.clip_id,
+                params.start,
+                params.end,
+                params
+                    .silence_threshold_db
+                    .unwrap_or(-35.0)
+                    .clamp(-120.0, 0.0),
+                params.min_silence.unwrap_or(0.5).max(0.05),
+                params.padding.unwrap_or(0.1).clamp(0.0, 5.0),
+                params.track_ids.unwrap_or_default(),
+                params.dry_run.unwrap_or(false),
+            )
+        })
+        .await
+        .map_err(|error| to_mcp_err(format!("silence removal task panicked: {error}")))?
         .map_err(to_mcp_err)?;
         ok_json(&result)
     }
@@ -1301,7 +1356,7 @@ impl ConcatAgentServer {
     }
 
     #[tool(
-        description = "Apply several commands as one transaction. Requires `expectedRevision` (the `revision` of the latest state); a stale value is rejected. The plan is staged on a copy, validated, then committed as a single undo step - any failure commits nothing. Use `dryRun` to preview: returns old/new revision, per-operation `createdIds`, `refs`, clip/marker/media deltas, duration change, the validation report and a field-level `diff`. Includes ripple ops sharing ripplePolicy (none|selectedTracks|allTracks), linkPolicy (preserve|detach|explicit) and markerPolicy (attachedOnly|shiftFree|fixed): `rippleDelete` {clipIds}, `rippleTrim` {clipId, edge: start|end, delta}, `rippleInsert` {mediaId, trackId, start} and `insertGap` {at, duration, trackIds}. Defaults: selectedTracks, preserve, shiftFree."
+        description = "Apply several commands as one transaction. Requires `expectedRevision` (the `revision` of the latest state); a stale value is rejected. The plan is staged on a copy, validated, then committed as a single undo step - any failure commits nothing. Use `dryRun` to preview: returns old/new revision, per-operation `createdIds`, `refs`, clip/marker/media deltas, duration change, the validation report and a field-level `diff`. Includes ripple ops sharing ripplePolicy (none|selectedTracks|allTracks), linkPolicy (preserve|detach|explicit) and markerPolicy (attachedOnly|shiftFree|fixed): `rippleDelete` {clipIds}, `rippleTrim` {clipId, edge: start|end, delta}, `rippleInsert` {mediaId, trackId, start} and `insertGap` {at, duration, trackIds} and `rippleDeleteRange` {start, end, trackIds}, which cuts a span of time out of every (or the named) lane and closes it. Defaults: selectedTracks, preserve, shiftFree."
     )]
     fn apply_edit_plan(
         &self,

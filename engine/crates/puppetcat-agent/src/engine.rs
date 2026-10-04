@@ -178,6 +178,20 @@ fn diff_projects(
     (out, truncated)
 }
 
+/// What `remove_silence` found and did.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SilenceRemoval {
+    /// The spans cut, latest first, in the timeline's times before any cut.
+    pub cuts: Vec<analysis::AudioInterval>,
+    /// Total seconds those spans cover.
+    pub removed_seconds: f64,
+    /// Caveats from the analysis, e.g. clips whose filters it ignored.
+    pub warnings: Vec<String>,
+    /// The edit plan's report; absent when there was nothing to cut.
+    pub plan: Option<EditPlanResult>,
+}
+
 /// Replaces every string equal to `$name` with the id that reference
 /// resolved to. An unknown name is an error rather than a literal, so a typo
 /// cannot silently address the wrong object.
@@ -860,6 +874,63 @@ impl AgentEngine {
             include_buckets,
             warnings,
         ))
+    }
+
+    /// Cuts the silence out of the active timeline, or out of one clip's
+    /// stretch of it: analyses the audio, shrinks every silent run by
+    /// `padding`, and ripple-deletes what is left as one undoable edit.
+    /// Every lane is cut together so picture and sound stay in step - unless
+    /// `track_ids` says otherwise. `dry_run` reports the plan and commits
+    /// nothing. Whatever has no sound under it counts as silent, so a
+    /// picture-only stretch is cut too: scope it with `clip_id`, a time
+    /// range or `track_ids`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn remove_silence(
+        &self,
+        clip_id: Option<String>,
+        start: Option<f64>,
+        end: Option<f64>,
+        silence_threshold_db: f64,
+        min_silence: f64,
+        padding: f64,
+        track_ids: Vec<String>,
+        dry_run: bool,
+    ) -> Result<SilenceRemoval, String> {
+        let revision = self.get_state()?.revision;
+        let analysis = self.analyze_audio(
+            None,
+            clip_id,
+            start,
+            end,
+            0.05,
+            silence_threshold_db,
+            min_silence,
+            false,
+        )?;
+        let cuts = analysis::silence_cuts(&analysis.silence, padding, 0.05);
+        let removed_seconds = cuts.iter().map(|cut| cut.duration).sum();
+        let plan = if cuts.is_empty() {
+            None
+        } else {
+            let operations = cuts
+                .iter()
+                .map(|cut| {
+                    serde_json::json!({
+                        "op": "rippleDeleteRange",
+                        "start": cut.start,
+                        "end": cut.end,
+                        "trackIds": track_ids,
+                    })
+                })
+                .collect();
+            Some(self.apply_edit_plan(revision, operations, dry_run, true)?)
+        };
+        Ok(SilenceRemoval {
+            cuts,
+            removed_seconds,
+            warnings: analysis.warnings,
+            plan,
+        })
     }
 
     /// Returns a compact, optionally filtered summary of one timeline.
@@ -1661,6 +1732,199 @@ mod tests {
             .apply_edit_plan(revision, vec![none], false, true)
             .unwrap();
         assert_eq!(start_of(&third), Some(20.0));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ripple_delete_range_cuts_every_lane_and_keeps_linked_audio_paired() {
+        use serde_json::json;
+        let (root, agent, video) = project_with_clip("ripple-range");
+        let media = agent.get_state().unwrap().project.media[0].id.clone();
+        agent
+            .apply(Command::RemoveMedia { media_id: media })
+            .unwrap();
+        let media = agent
+            .apply(Command::AddMedia {
+                item: puppetcat_project::commands::NewMedia {
+                    path: "/nowhere/av.mp4".to_owned(),
+                    name: "av.mp4".to_owned(),
+                    duration: Some(10.0),
+                    kind: puppetcat_project::model::MediaKind::Video,
+                    width: None,
+                    height: None,
+                    frame_rate: None,
+                    frame_rate_fraction: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    has_audio: true,
+                },
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        let _ = video;
+        let video = agent
+            .apply(Command::AddClip {
+                media_id: media,
+                track_id: "T1".to_owned(),
+                start: 0.0,
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        agent
+            .apply(Command::DetachAudio {
+                clip_id: video.clone(),
+            })
+            .unwrap();
+        agent
+            .apply(Command::AddMarker {
+                time: 6.0,
+                name: Some("free".to_owned()),
+                clip_id: None,
+            })
+            .unwrap();
+
+        let revision = agent.get_state().unwrap().revision;
+        agent
+            .apply_edit_plan(
+                revision,
+                vec![json!({"op": "rippleDeleteRange", "start": 2.0, "end": 4.0})],
+                false,
+                true,
+            )
+            .expect("plan");
+
+        let state = agent.get_state().unwrap();
+        let active = state.project.active();
+        let mut spans: Vec<(String, f64, f64)> = active
+            .clips
+            .iter()
+            .map(|c| (c.track_id.clone(), c.start, c.start + c.duration))
+            .collect();
+        spans.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        assert_eq!(spans.len(), 4, "two pieces on each lane: {spans:?}");
+        for lane in spans.chunks(2) {
+            assert_eq!((lane[0].1, lane[0].2), (0.0, 2.0), "{lane:?}");
+            assert_eq!((lane[1].1, lane[1].2), (2.0, 8.0), "{lane:?}");
+        }
+        assert_eq!(active.markers[0].time, 4.0, "free marker follows");
+
+        // Each audio piece is paired with the picture it plays with.
+        for clip in active.clips.iter().filter(|c| c.detached_from.is_some()) {
+            let parent = active
+                .clips
+                .iter()
+                .find(|c| Some(&c.id) == clip.detached_from.as_ref())
+                .expect("parent exists");
+            assert_eq!(parent.start, clip.start, "paired with its own picture");
+        }
+
+        // One undo restores the whole cut.
+        agent.undo().unwrap();
+        let restored = agent.get_state().unwrap();
+        assert_eq!(restored.project.active().clips.len(), 2);
+        assert_eq!(restored.project.active().markers[0].time, 6.0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A WAV of 8 kHz mono 16-bit sound: a tone for `tone` seconds, then
+    /// silence for `gap`, then a tone again for `tone`.
+    fn tone_gap_tone_wav(path: &std::path::Path, tone: f64, gap: f64) {
+        let rate = 8000usize;
+        let mut samples: Vec<i16> = Vec::new();
+        let burst = |samples: &mut Vec<i16>| {
+            for n in 0..(tone * rate as f64) as usize {
+                let phase = n as f64 * 440.0 * std::f64::consts::TAU / rate as f64;
+                samples.push((phase.sin() * 16000.0) as i16);
+            }
+        };
+        burst(&mut samples);
+        samples.extend(std::iter::repeat_n(0, (gap * rate as f64) as usize));
+        burst(&mut samples);
+        let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&(rate as u32).to_le_bytes());
+        wav.extend_from_slice(&(rate as u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&data);
+        std::fs::write(path, wav).expect("writes the wav");
+    }
+
+    #[test]
+    fn remove_silence_cuts_the_gap_between_two_tones_as_one_undoable_edit() {
+        let (root, agent, first) = project_with_clip("silence");
+        agent
+            .apply(Command::RemoveClips {
+                clip_ids: vec![first],
+            })
+            .unwrap();
+        let wav = root.join("speech.wav");
+        tone_gap_tone_wav(&wav, 1.0, 1.5);
+        let media = agent
+            .apply(Command::AddMedia {
+                item: puppetcat_project::commands::NewMedia {
+                    path: wav.to_string_lossy().into_owned(),
+                    name: "speech.wav".to_owned(),
+                    duration: Some(3.5),
+                    kind: puppetcat_project::model::MediaKind::Audio,
+                    width: None,
+                    height: None,
+                    frame_rate: None,
+                    frame_rate_fraction: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    has_audio: true,
+                },
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        agent
+            .apply(Command::AddClip {
+                media_id: media,
+                track_id: "T1".to_owned(),
+                start: 0.0,
+            })
+            .unwrap();
+        let duration = || agent.get_state().unwrap().project.active().duration();
+
+        // A dry run reports the cut and leaves the project alone.
+        let dry = agent
+            .remove_silence(None, None, None, -35.0, 0.5, 0.1, Vec::new(), true)
+            .expect("dry run");
+        assert_eq!(dry.cuts.len(), 1, "{:?}", dry.cuts);
+        assert!((dry.cuts[0].start - 1.1).abs() < 0.1, "{:?}", dry.cuts);
+        assert!((dry.removed_seconds - 1.3).abs() < 0.15, "{dry:?}");
+        assert!(!dry.plan.as_ref().expect("plan").committed);
+        assert!((duration() - 3.5).abs() < 0.01);
+
+        let done = agent
+            .remove_silence(None, None, None, -35.0, 0.5, 0.1, Vec::new(), false)
+            .expect("cuts");
+        assert!(done.plan.expect("plan").committed);
+        assert!(
+            (duration() - (3.5 - done.removed_seconds)).abs() < 0.01,
+            "the timeline closes by exactly what was cut"
+        );
+
+        // Nothing left to cut the second time round.
+        let again = agent
+            .remove_silence(None, None, None, -35.0, 0.5, 0.1, Vec::new(), false)
+            .expect("second pass");
+        assert!(again.cuts.is_empty() && again.plan.is_none());
+
+        agent.undo().unwrap();
+        assert!((duration() - 3.5).abs() < 0.01, "one undo restores it");
         let _ = std::fs::remove_dir_all(&root);
     }
 

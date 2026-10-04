@@ -97,6 +97,10 @@ pub struct Clip {
     pub animation: Option<Animation>,
     /// How the clip's colour meets what is beneath it.
     pub blend: Blend,
+    /// Seconds at the end of the clip during which its last frame is held
+    /// still: how a transition shows the outgoing picture for as long as it
+    /// needs when the file has no more footage to give. Zero for none.
+    pub hold_tail: Rational,
     /// The geometry of a motion transition arriving at the clip's start.
     pub motion_in: Option<Motion>,
     /// The geometry of a motion transition leaving at the clip's end.
@@ -323,6 +327,7 @@ impl Clip {
             reverse: false,
             animation: None,
             blend: Blend::Normal,
+            hold_tail: Rational::ZERO,
             motion_in: None,
             motion_out: None,
         }
@@ -423,6 +428,7 @@ impl Clip {
         if !self.contains(time) {
             return None;
         }
+        let time = self.held_time(time);
         let forward = match &self.retime {
             // The area under the curve, in fractions of the clip's length,
             // scaled back to seconds. Approximated to a rational at the end
@@ -446,6 +452,32 @@ impl Clip {
         })
     }
 
+    /// The instant whose picture the clip shows at `time`: `time` itself,
+    /// except in the held tail, where it is the last frame before the hold
+    /// began. Just short of it, so the frame is one the file really has.
+    fn held_time(&self, time: Rational) -> Rational {
+        if self.hold_tail.is_zero() {
+            return time;
+        }
+        let held_from = self.start + self.duration - self.hold_tail;
+        if time <= held_from {
+            return time;
+        }
+        let last_frame = Rational::new(1, 60);
+        let frozen = held_from - last_frame;
+        if frozen < self.start {
+            self.start
+        } else {
+            frozen
+        }
+    }
+
+    /// Whether `time` falls in the held tail, where one frame is repeated and
+    /// a paced decoder has nothing to follow.
+    pub fn in_hold(&self, time: Rational) -> bool {
+        !self.hold_tail.is_zero() && time > self.start + self.duration - self.hold_tail
+    }
+
     /// How much of the source this clip consumes: `duration * speed`, or the
     /// area under the curve when there is one.
     pub fn source_duration(&self) -> Rational {
@@ -461,6 +493,12 @@ impl Clip {
     /// frame has to be sought by its own source time.
     pub fn is_paced(&self) -> bool {
         self.retime.is_none() && !self.reverse
+    }
+
+    /// [`Clip::is_paced`], and not in the held tail, where every frame is the
+    /// same one.
+    pub fn is_paced_at(&self, time: Rational) -> bool {
+        self.is_paced() && !self.in_hold(time)
     }
 }
 
@@ -825,6 +863,29 @@ mod tests {
         let old = outgoing.motion_at(t).reveal;
         assert_eq!(new, (0.75, 1.0));
         assert_eq!(old, Some((0.0, 0.75)), "the old picture keeps the rest");
+    }
+
+    #[test]
+    fn a_held_tail_repeats_one_frame_and_is_not_paced() {
+        let mut clip = Clip::new(MediaRef::new("a.mp4"), seconds(10), seconds(4));
+        clip.hold_tail = seconds(1);
+        // Before the hold, time maps as usual and a decoder can follow it.
+        assert_eq!(clip.source_time_at(seconds(12)), Some(seconds(2)));
+        assert!(clip.is_paced_at(seconds(12)));
+        // In the hold, every instant is the frame just before it began.
+        let held = clip.source_time_at(Rational::new(27, 2)).expect("inside");
+        assert_eq!(
+            held,
+            clip.source_time_at(Rational::new(55, 4)).expect("inside")
+        );
+        assert!(held < seconds(3) && held > Rational::new(8, 3));
+        assert!(!clip.is_paced_at(Rational::new(27, 2)));
+        // A clip with no hold is untouched.
+        clip.hold_tail = Rational::ZERO;
+        assert_eq!(
+            clip.source_time_at(Rational::new(27, 2)),
+            Some(Rational::new(7, 2))
+        );
     }
 
     #[test]

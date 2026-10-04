@@ -99,7 +99,7 @@ pub fn plan_frame(timeline: &Timeline, time: Rational) -> FramePlan {
             // sees a per-frame opacity - it has no idea fades exist.
             opacity: (clip.opacity_at(time) * clip.video_fade_factor(time)).clamp(0.0, 1.0),
             transform,
-            paced: clip.is_paced(),
+            paced: clip.is_paced_at(time),
             blend: clip.blend,
             reveal: motion.reveal,
         });

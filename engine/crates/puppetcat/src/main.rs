@@ -894,6 +894,10 @@ fn main() -> Result<(), slint::PlatformError> {
                     },
                 });
             }
+            "transition-remove" => state.set_clip_transition(&id, None),
+            other if other.starts_with("transition:") => {
+                state.set_clip_transition(&id, Some(&other["transition:".len()..]));
+            }
             "clip-scenes" => state.detect_scenes(id),
             "clip-beats" => state.mark_beats(studio::SilenceScope::Clip(id)),
             "clip-silence" => state.open_silence(studio::SilenceScope::Clip(id)),

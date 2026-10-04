@@ -2023,6 +2023,28 @@ impl Studio {
         );
     }
 
+    /// Sets, changes or (with `None`) removes the transition into a clip. A
+    /// change keeps the length the clip's transition already had.
+    pub fn set_clip_transition(&mut self, clip_id: &str, transition: Option<&str>) {
+        let Some(clip) = self.clip(clip_id).cloned() else {
+            return;
+        };
+        if !clip.kind.is_visual() {
+            return;
+        }
+        let value = transition.map(|id| Transition {
+            id: id.to_owned(),
+            duration: clip.transition_in.as_ref().map_or(0.5, |held| held.duration),
+        });
+        self.apply(Command::UpdateClip {
+            clip_id: clip_id.to_owned(),
+            patch: ClipPatch {
+                transition_in: Some(value),
+                ..ClipPatch::default()
+            },
+        });
+    }
+
     pub fn apply_transition(&mut self, id: &str) {
         let Some(clip_id) = self.sole_selection() else {
             self.notify("Select the clip the transition leads into", true);
@@ -4923,6 +4945,28 @@ impl Studio {
             ),
             rule(),
         ];
+        if clip.kind.is_visual() {
+            // The transition into this clip: the cut with the clip before it.
+            rows.push(heading("Transition in"));
+            let current = clip.transition_in.as_ref().map(|t| t.id.as_str());
+            for info in puppetcat_effects::TRANSITIONS {
+                rows.push(check(
+                    &format!("transition:{}", info.id),
+                    info.name,
+                    "",
+                    current == Some(info.id),
+                    !locked,
+                ));
+            }
+            rows.push(action(
+                "transition-remove",
+                "Remove transition".into(),
+                Glyph::Close,
+                "",
+                current.is_some() && !locked,
+            ));
+            rows.push(rule());
+        }
         let audible = clip.kind != model::ClipKind::Image;
         rows.push(check(
             "mute",

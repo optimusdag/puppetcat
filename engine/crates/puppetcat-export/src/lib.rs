@@ -351,11 +351,14 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
         }
     }
 
+    // In time order along the timeline, so by the time a clip is the outgoing
+    // one its own lane is settled: the chain alternates from its first cut.
+    cuts.sort_by(|a, b| clips[a.incoming].start.total_cmp(&clips[b.incoming].start));
     for cut in cuts {
         match cut.kind.as_str() {
             "cross-fade" => {
                 match borrow_handle(clips, cut.outgoing, cut.incoming, cut.duration, frame) {
-                    Handle::Overlap(d) => clips[cut.incoming].video_fade_in = d,
+                    Handle::Overlap(d) => dissolve(clips, cut.outgoing, cut.incoming, d),
                     Handle::Short => {}
                     Handle::Missing => {
                         // The outgoing clip may still have footage past its
@@ -365,7 +368,7 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
                         if let Some(d) =
                             extend_tail(clips, cut.outgoing, cut.incoming, cut.duration, frame)
                         {
-                            clips[cut.incoming].video_fade_in = d;
+                            dissolve(clips, cut.outgoing, cut.incoming, d);
                             continue;
                         }
                         // No handle to borrow without surfacing the cut: dip
@@ -407,10 +410,9 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
                     };
                 if let Some(d) = overlap {
                     clips[cut.outgoing].motion_out = Some((motion, d));
-                    let b = &mut clips[cut.incoming];
-                    b.motion_in = Some((motion, d));
+                    clips[cut.incoming].motion_in = Some((motion, d));
                     if dissolves {
-                        b.video_fade_in = d;
+                        dissolve(clips, cut.outgoing, cut.incoming, d);
                     }
                 } else {
                     let Some(half) = dip_half(clips, &cut, frame) else {
@@ -470,6 +472,32 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
             _ => {}
         }
     }
+}
+
+/// Dissolves the overlap of a transition: fades whichever of the two clips is
+/// drawn on top. The incoming clip fades in when it is the upper one; when
+/// the lanes alternate along a chain of transitions and it is the lower one,
+/// the outgoing clip fades out over it instead - fading the lower clip in
+/// would do nothing, hidden beneath a clip that is still opaque.
+fn dissolve(clips: &mut [ExportClip], outgoing: usize, incoming: usize, d: f64) {
+    if clips[incoming].track > clips[outgoing].track {
+        clips[incoming].video_fade_in = d;
+    } else {
+        clips[outgoing].video_fade_out = d;
+    }
+}
+
+/// The other lane of the pair a clip's lane belongs to. Lanes are doubled
+/// before transitions resolve, so every original lane `2k` has a free lane
+/// `2k + 1` beside it: the incoming clip of a transition goes to whichever of
+/// the two its outgoing clip is not on. In a chain of transitions that
+/// alternates - A on `2k`, B on `2k + 1`, C back on `2k` - so the outgoing
+/// clip, running on under the incoming one's head, never shares a lane with
+/// it, and no two clips of the chain ever do. (The compositor draws one clip
+/// per lane at a time, so a shared lane would hide one picture of the
+/// transition and fade the other in alone over black.)
+fn other_lane(track: usize) -> usize {
+    track ^ 1
 }
 
 /// What borrowing a handle for a transition came to.
@@ -535,10 +563,7 @@ fn borrow_handle(
     // Sound rides the picture: the pre-roll fades in rather than arriving at
     // full level a transition early.
     b.fade_in = b.fade_in.max(d);
-    // The lane above the outgoing clip's own: odd lanes are the ones the
-    // doubling left free, and a chain of transitions must not climb into
-    // the next original lane's.
-    b.track = (a_track & !1) + 1;
+    b.track = other_lane(a_track);
     Handle::Overlap(d)
 }
 
@@ -579,8 +604,7 @@ fn extend_tail(
     a.duration += d;
     a.hold_tail = d - real;
     a.fade_out = a.fade_out.max(d);
-    let lane = a.track & !1;
-    clips[incoming].track = lane + 1;
+    clips[incoming].track = other_lane(a.track);
     Some(d)
 }
 
@@ -3069,8 +3093,14 @@ mod tests {
             outro.start, 10.5,
             "the tail's black starts 1.5 s from the end"
         );
-        assert_eq!(film.video_fade_in, 0.5);
-        assert_eq!(outro.video_fade_in, 0.5);
+        assert_eq!(
+            film.video_fade_in, 0.5,
+            "the film fades in over the head's black"
+        );
+        // The tail's black lands on the lane below the film, so the film fades
+        // out over it - the same dissolve, seen from the other side.
+        assert_eq!(film.video_fade_out, 0.5);
+        assert_eq!(outro.video_fade_in, 0.0);
     }
 
     /// End to end against a real FFmpeg: a one-pixel black still with no
@@ -3143,6 +3173,104 @@ mod tests {
         let _ = std::fs::remove_file(&written);
     }
 
+    /// End to end against a real FFmpeg: in a chain of cross-fades across three
+    /// different files, EVERY cut blends its two pictures - not just the first.
+    /// The lanes alternate along a chain, and a dissolve that fades the wrong
+    /// clip is invisible and shows as a hard cut. Skips silently without
+    /// FFmpeg.
+    #[test]
+    fn every_cut_in_a_chain_of_cross_fades_blends_its_two_pictures() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_media::{DecodeOptions, Decoder, EncodeOptions, Encoder, FrameSink};
+        use std::sync::atomic::AtomicBool;
+
+        let dir = std::env::temp_dir();
+        let make = |name: &str, colour: [u8; 4]| -> Option<String> {
+            let path = dir.join(name);
+            let mut enc =
+                Encoder::create(&path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
+                    .ok()?;
+            for _ in 0..150 {
+                let mut frame = Frame::black(64, 64);
+                frame.fill(colour);
+                enc.write_frame(&frame).ok()?;
+            }
+            enc.finish().ok()?;
+            Some(path.to_string_lossy().into_owned())
+        };
+        let Some(red) = make("puppetcat-chain-red.mp4", [255, 0, 0, 255]) else {
+            return; // no ffmpeg here
+        };
+        let blue = make("puppetcat-chain-blue.mp4", [0, 0, 255, 255]).expect("same encoder");
+        let green = make("puppetcat-chain-green.mp4", [0, 255, 0, 255]).expect("same encoder");
+
+        let mut clips = Vec::new();
+        for (index, path) in [&red, &blue, &green].into_iter().enumerate() {
+            let mut c = clip("video", 0, index as f64 * 2.0, 2.0, 0.0);
+            c.path = path.clone();
+            c.media_width = Some(64);
+            c.media_height = Some(64);
+            c.media_duration = Some(5.0);
+            if index > 0 {
+                c.transition = spec("cross-fade", 1.0);
+            }
+            clips.push(c);
+        }
+        let out = dir.join("puppetcat-chain-out.mp4");
+        let request = ExportRequest {
+            output: out.to_string_lossy().into_owned(),
+            scratch_dir: None,
+            width: 64,
+            height: 64,
+            rate_num: 30,
+            rate_den: 1,
+            crf: 18,
+            preset: "medium".to_owned(),
+            clips,
+            range: None,
+        };
+        let cancel = AtomicBool::new(false);
+        let mut progress = |_: i64, _: i64, _: &'static str| {};
+        let written = render(
+            &request,
+            Reporter {
+                progress: &mut progress,
+                cancel: &cancel,
+            },
+        )
+        .expect("renders");
+        let mut decoder = Decoder::open(&written, &DecodeOptions::default()).expect("decodes");
+        let mut frames = Vec::new();
+        while let Some(frame) = decoder.next_frame().expect("a frame") {
+            frames.push(frame);
+        }
+        // Each overlap starts at the cut and lasts a second; halfway through
+        // it both colours are present at once. First cut at 2.0 s: red into
+        // blue; second cut at 4.0 s: blue into green.
+        let mid_first = frames[75].pixel(32, 32).expect("in range");
+        assert!(
+            mid_first[0] > 60 && mid_first[2] > 60,
+            "first cut is a hard cut: {mid_first:?}"
+        );
+        let mid_second = frames[135].pixel(32, 32).expect("in range");
+        assert!(
+            mid_second[1] > 60 && mid_second[2] > 60,
+            "second cut is a hard cut: {mid_second:?}"
+        );
+        // And the picture is never black through either.
+        for index in 62..90 {
+            let p = frames[index].pixel(32, 32).expect("in range");
+            assert!(
+                p[0] > 40 || p[1] > 40 || p[2] > 40,
+                "black at frame {index}: {p:?}"
+            );
+        }
+        for path in [&red, &blue, &green] {
+            let _ = std::fs::remove_file(path);
+        }
+        let _ = std::fs::remove_file(&written);
+    }
+
     #[test]
     fn a_motion_between_different_clips_runs_the_outgoing_clip_on_under_the_incoming() {
         // Two different files; the first was trimmed to 2 s of a 10 s file,
@@ -3194,21 +3322,90 @@ mod tests {
         assert_eq!(clips[1].video_fade_in, 1.0, "a zoom also dissolves");
     }
 
+    /// No two visible clips may overlap on one lane: the compositor shows one
+    /// clip per lane at a time, so an overlap hides one picture of a
+    /// transition and the other fades in alone over black.
+    fn assert_no_overlap_on_a_lane(clips: &[ExportClip]) {
+        for (i, a) in clips.iter().enumerate() {
+            for b in &clips[i + 1..] {
+                if a.track != b.track || a.hidden || b.hidden {
+                    continue;
+                }
+                let overlap =
+                    a.start.max(b.start) < (a.start + a.duration).min(b.start + b.duration) - 1e-9;
+                assert!(
+                    !overlap,
+                    "lane {}: [{:.2}+{:.2}] overlaps [{:.2}+{:.2}]",
+                    a.track, a.start, a.duration, b.start, b.duration
+                );
+            }
+        }
+    }
+
     #[test]
-    fn a_chain_of_transitions_never_climbs_into_the_next_original_lane() {
+    fn a_dissolve_fades_whichever_clip_is_on_top_along_a_chain() {
+        // A -> B -> C by cross-fade. B is drawn above A, so B fades in; C
+        // lands on the lane below B, so B fades out instead - a fade-in
+        // underneath an opaque B would never be seen.
         let mut clips = vec![
-            clip("video", 0, 0.0, 2.0, 0.0),
-            clip("video", 0, 2.0, 2.0, 2.0),
-            clip("video", 0, 4.0, 2.0, 4.0),
+            clip("video", 0, 0.0, 3.0, 0.0),
+            clip("video", 0, 3.0, 3.0, 0.0),
+            clip("video", 0, 6.0, 3.0, 0.0),
         ];
-        clips[1].transition = spec("push", 1.0);
-        clips[2].transition = spec("push", 1.0);
+        for c in &mut clips {
+            c.media_duration = Some(100.0);
+        }
+        clips[1].path = "b.mp4".to_owned();
+        clips[2].path = "c.mp4".to_owned();
+        clips[1].transition = spec("cross-fade", 1.0);
+        clips[2].transition = spec("cross-fade", 1.0);
         resolve_transitions(&mut clips, FrameRate::THIRTY, false);
-        assert!(
-            clips.iter().all(|c| c.track <= 1),
-            "{:?}",
-            clips.iter().map(|c| c.track).collect::<Vec<_>>()
+        let (a, b, c) = (&clips[0], &clips[1], &clips[2]);
+        assert!(b.track > a.track && c.track < b.track);
+        assert_eq!(b.video_fade_in, 1.0, "B is above A: it fades in");
+        assert_eq!(a.video_fade_out, 0.0);
+        assert_eq!(b.video_fade_out, 1.0, "B is above C: it fades out");
+        assert_eq!(
+            c.video_fade_in, 0.0,
+            "C is below B: fading it in would not show"
         );
+    }
+
+    #[test]
+    fn a_chain_of_transitions_alternates_lanes_so_no_two_clips_share_one() {
+        for kind in ["cross-fade", "push", "zoom", "wipe-left"] {
+            // Four adjacent clips of two files, each cut carrying a
+            // transition, as a real edit has: no stretch of the chain may put
+            // two clips on one lane, or one picture of a transition vanishes.
+            let mut clips = vec![
+                clip("video", 0, 0.0, 3.0, 0.0),
+                clip("video", 0, 3.0, 3.0, 0.0),
+                clip("video", 0, 6.0, 3.0, 3.0),
+                clip("video", 0, 9.0, 3.0, 3.0),
+            ];
+            clips[1].path = "other.mp4".to_owned();
+            clips[3].path = "other.mp4".to_owned();
+            for c in &mut clips {
+                c.media_duration = Some(100.0);
+            }
+            for c in clips.iter_mut().skip(1) {
+                c.transition = spec(kind, 1.0);
+            }
+            resolve_transitions(&mut clips, FrameRate::THIRTY, false);
+            assert_no_overlap_on_a_lane(&clips);
+            assert!(
+                clips.iter().all(|c| c.track <= 1),
+                "{kind}: stays on its pair of lanes"
+            );
+            // Each incoming clip is on a different lane from the clip it
+            // transitions from, so both pictures can be drawn.
+            for pair in clips.windows(2) {
+                assert_ne!(
+                    pair[0].track, pair[1].track,
+                    "{kind}: a cut's clips share a lane"
+                );
+            }
+        }
     }
 
     #[test]

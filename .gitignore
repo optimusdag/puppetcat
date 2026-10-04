@@ -59,3 +59,9 @@ desktop.ini
 # Mac's own keychain) and large, so it is never committed.
 /PuppetCat.app/
 /PuppetCat-*.dmg
+
+# AI Coding Companion (per-developer task state, quick actions)
+/.aicc/
+
+# Claude Code local state and worktrees
+/.claude/

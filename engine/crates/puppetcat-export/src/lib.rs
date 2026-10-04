@@ -2707,6 +2707,57 @@ mod tests {
         assert_eq!(clips[1].track, 6);
     }
 
+    /// Every video effect's FFmpeg chain, at its defaults, must be one FFmpeg
+    /// accepts. The catalogue's own fixtures only pin the text of a chain, so
+    /// a typo in a manifest passes there and fails on the first export that
+    /// takes the CPU path. Skips silently without FFmpeg.
+    #[test]
+    fn every_video_effect_chain_is_accepted_by_ffmpeg() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_effects::manifest::Kind;
+        use puppetcat_media::{EncodeOptions, Encoder, FrameSink};
+
+        let path = std::env::temp_dir().join("puppetcat-chain-validity.mp4");
+        let Ok(mut encoder) =
+            Encoder::create(&path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
+        else {
+            return; // no ffmpeg here
+        };
+        for _ in 0..4 {
+            let mut frame = Frame::black(64, 64);
+            frame.fill([30, 200, 40, 255]);
+            encoder.write_frame(&frame).expect("writes");
+        }
+        encoder.finish().expect("finishes");
+
+        let catalogue = Catalogue::builtin();
+        let mut failures = Vec::new();
+        for package in catalogue
+            .of_kind(Kind::Effect)
+            .chain(catalogue.of_kind(Kind::Filter))
+        {
+            let chain = catalogue.video_chain(&[AppliedFilter {
+                id: package.id().to_owned(),
+                params: Default::default(),
+                enabled: true,
+            }]);
+            // A chain with labelled links (glow, mirror) is refused at the
+            // decoder by design and carried by its shader instead.
+            if chain.is_empty() || puppetcat_media::audio::validate_chain(&chain).is_err() {
+                continue;
+            }
+            let options = DecodeOptions::default()
+                .scaled_to(64, 64)
+                .filtered(chain.clone());
+            let read = Decoder::open(&path, &options).and_then(|mut d| d.next_frame());
+            if !matches!(read, Ok(Some(_))) {
+                failures.push(format!("{}: {chain}", package.id()));
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+        assert!(failures.is_empty(), "FFmpeg rejected: {failures:#?}");
+    }
+
     #[test]
     fn an_unknown_transition_kind_renders_as_a_plain_cut() {
         let mut clips = vec![

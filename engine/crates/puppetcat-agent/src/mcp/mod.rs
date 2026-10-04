@@ -711,11 +711,27 @@ pub struct StartExportParams {
 #[derive(Clone)]
 pub struct ConcatAgentServer {
     engine: Arc<AgentEngine>,
+    /// Where tool calls run: here, here after trying a window, or in the
+    /// window this server is hosted by. See [`crate::bridge`].
+    route: Route,
     // Read by the `#[tool_handler]`-generated `ServerHandler` methods below,
     // not by anything in this file - the dead_code pass doesn't see across
     // the two macro-expanded impl blocks, hence the `allow`.
     #[allow(dead_code)]
     tool_router: ToolRouter<ConcatAgentServer>,
+}
+
+/// Where a server's tool calls run.
+#[derive(Clone)]
+enum Route {
+    /// On this server's own engine, which opens projects itself.
+    Local,
+    /// On this engine - unless a window is running and this engine has no
+    /// project of its own open, in which case the window's server runs it.
+    Forwarding(Arc<crate::bridge::Forwarder>),
+    /// In a window: the engine works on the window's session, lent for the
+    /// length of each call.
+    Hosted(crate::bridge::Hosted),
 }
 
 #[tool_router]
@@ -725,6 +741,26 @@ impl ConcatAgentServer {
     pub fn new(engine: Arc<AgentEngine>) -> Self {
         Self {
             engine,
+            route: Route::Local,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    /// Like [`ConcatAgentServer::new`], but a call goes to the running window
+    /// through `forwarder` when there is one and this server has no project
+    /// open itself.
+    pub fn forwarding(engine: Arc<AgentEngine>, forwarder: Arc<crate::bridge::Forwarder>) -> Self {
+        Self {
+            route: Route::Forwarding(forwarder),
+            ..Self::new(engine)
+        }
+    }
+
+    /// A server hosted by a window; see [`crate::bridge::host`].
+    pub(crate) fn hosted(hosted: crate::bridge::Hosted) -> Self {
+        Self {
+            engine: Arc::clone(&hosted.engine),
+            route: Route::Hosted(hosted),
             tool_router: Self::tool_router(),
         }
     }
@@ -1700,6 +1736,43 @@ impl ConcatAgentServer {
 
 #[tool_handler]
 impl ServerHandler for ConcatAgentServer {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, McpError> {
+        // In a window: the window's session is lent to the engine for exactly
+        // this call.
+        if let Route::Hosted(hosted) = &self.route {
+            let this = self.clone();
+            return hosted
+                .leased(async move {
+                    let tcc =
+                        rmcp::handler::server::tool::ToolCallContext::new(&this, request, context);
+                    this.tool_router.call(tcc).await
+                })
+                .await
+                .map_err(to_mcp_err)?;
+        }
+        // Stand-alone: a running window takes the call, unless this server
+        // already has a project open of its own - which it keeps working on.
+        if let Route::Forwarding(forwarder) = &self.route
+            && !self.engine.has_project()
+        {
+            match forwarder.forward(&request).await {
+                crate::bridge::Forwarded::Done(response) => return Ok(response),
+                crate::bridge::Forwarded::Failed(error) => {
+                    return Err(to_mcp_err(format!(
+                        "the PuppetCat window was reached but the call did not complete: {error}"
+                    )));
+                }
+                crate::bridge::Forwarded::NoWindow => {}
+            }
+        }
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())

@@ -311,7 +311,10 @@ fn shape(project: &puppetcat_project::Project) -> (usize, usize, usize, f64) {
 /// editing.
 struct OpenProject {
     session: puppetcat_host::Session,
-    _lock: SlotLock,
+    /// The agent's claim on the project. `None` for a session the window has
+    /// lent for one call: the window already holds the project, and the lent
+    /// session goes back to it when the call ends.
+    _lock: Option<SlotLock>,
 }
 
 impl std::ops::Deref for OpenProject {
@@ -364,6 +367,46 @@ impl AgentEngine {
         })
     }
 
+    /// An engine for the window to host: it shares the window's export slot,
+    /// so an export started here and one started in the window can never run
+    /// together, and it works on whatever session the window lends it (see
+    /// [`AgentEngine::lend_in`]).
+    pub fn for_window(
+        dirs: puppetcat_host::AppDirs,
+        exporter: puppetcat_host::export::Exporter,
+    ) -> Result<Self, String> {
+        let mut engine = Self::with_dirs(dirs)?;
+        engine.export = ExportJob::with_exporter(exporter);
+        Ok(engine)
+    }
+
+    /// The app directories this engine works against.
+    pub fn dirs(&self) -> puppetcat_host::AppDirs {
+        self.dirs.clone()
+    }
+
+    /// Whether a project is open in this engine right now.
+    pub fn has_project(&self) -> bool {
+        self.session_lock().is_some()
+    }
+
+    /// Takes a session on loan - the window's, for one tool call - in place of
+    /// opening one. `None` leaves the engine with no project, as when the
+    /// window has nothing open.
+    pub fn lend_in(&self, session: Option<puppetcat_host::Session>) {
+        *self.session_lock() = session.map(|session| OpenProject {
+            session,
+            _lock: None,
+        });
+    }
+
+    /// Gives back whatever session the engine holds: the one lent in, or the
+    /// one a tool opened or created meanwhile. Releases any claim the engine
+    /// took on it, so the window can open it. `None` if the call closed it.
+    pub fn lend_out(&self) -> Option<puppetcat_host::Session> {
+        self.session_lock().take().map(|open| open.session)
+    }
+
     fn session_lock(&self) -> std::sync::MutexGuard<'_, Option<OpenProject>> {
         self.open.lock().expect("session mutex")
     }
@@ -411,7 +454,7 @@ impl AgentEngine {
         let _ = puppetcat_host::projects::remember(&self.dirs.config, info);
         *guard = Some(OpenProject {
             session,
-            _lock: lock,
+            _lock: Some(lock),
         });
         Ok(())
     }

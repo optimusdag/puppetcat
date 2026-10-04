@@ -14,7 +14,10 @@ use rmcp::transport::stdio;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = Arc::new(AgentEngine::new()?);
-    let server = ConcatAgentServer::new(engine);
+    // A running PuppetCat window takes the tool calls itself, so edits show up
+    // there live; with none running, they are handled here as ever.
+    let forwarder = Arc::new(puppetcat_agent::bridge::Forwarder::new(&engine.dirs()));
+    let server = ConcatAgentServer::forwarding(engine, forwarder);
 
     let service = server.serve(stdio()).await?;
     service.waiting().await?;

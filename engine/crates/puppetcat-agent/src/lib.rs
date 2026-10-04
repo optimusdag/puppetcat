@@ -11,6 +11,7 @@
 //! same way `puppetcat_host` stays ignorant of the window that happens to be
 //! its one caller today.
 
+pub mod bridge;
 pub mod catalogue;
 pub mod dto;
 pub mod engine;

@@ -30,8 +30,8 @@ base64 = "0.22"
 # The MCP transport is IO-bound (stdin/stdout JSON-RPC), unlike the rest of
 # the engine's CPU-bound render path - see the doc comment on `mcp` for why
 # tokio is scoped to this one crate rather than a workspace-wide change.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
-rmcp = { version = "3.2", features = ["server", "macros", "transport-io", "schemars"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "net", "sync"] }
+rmcp = { version = "3.2", features = ["server", "client", "macros", "transport-io", "schemars"] }
 
 [lints]
 workspace = true

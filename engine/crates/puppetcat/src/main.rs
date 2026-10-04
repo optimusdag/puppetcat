@@ -143,6 +143,7 @@ fn main() -> Result<(), slint::PlatformError> {
         editor.set_audio_params(ModelRc::from(models.audio_params.clone()));
         editor.set_adjust_params(ModelRc::from(models.adjust_params.clone()));
         editor.set_menu_items(ModelRc::from(models.menu.clone()));
+        editor.set_menu_sub_items(ModelRc::from(models.menu_sub.clone()));
         editor.set_marker_menu_items(ModelRc::from(models.marker_menu.clone()));
         editor.set_timeline_menu_items(ModelRc::from(models.timeline_menu.clone()));
         editor.set_av_items(ModelRc::from(models.av.clone()));

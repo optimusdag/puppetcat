@@ -565,6 +565,9 @@ export component Lanes inherits Rectangle {
     callback menu-selected(id: string);
 
     in property <[MenuItemData]> menu-items;
+    in property <string> menu-sub-id;
+    in property <[MenuItemData]> menu-sub-items;
+    in property <length> menu-sub-height;
     in property <length> menu-height;
     in property <int> menu-token;
 
@@ -1126,6 +1129,9 @@ export component Lanes inherits Rectangle {
             width: parent.width;
             height: parent.height;
             items: root.menu-items;
+            sub-id: root.menu-sub-id;
+            sub-items: root.menu-sub-items;
+            sub-height: root.menu-sub-height;
             menu-height: root.menu-height;
             token: root.own-token;
             selected(id) => { root.menu-selected(id); }

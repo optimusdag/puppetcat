@@ -92,6 +92,9 @@ export component TimelinePane inherits Rectangle {
     callback razored(id: string, seconds: float);
     in property <[MenuItemData]> menu-items;
     in property <length> menu-height;
+    in property <string> menu-sub-id;
+    in property <[MenuItemData]> menu-sub-items;
+    in property <length> menu-sub-height;
     in property <int> menu-token;
     callback clip-context(id: string);
     callback menu-selected(id: string);
@@ -331,6 +334,9 @@ export component TimelinePane inherits Rectangle {
                 razored(id, seconds) => { root.razored(id, seconds); }
                 menu-items: root.menu-items;
                 menu-height: root.menu-height;
+                menu-sub-id: root.menu-sub-id;
+                menu-sub-items: root.menu-sub-items;
+                menu-sub-height: root.menu-sub-height;
                 menu-token: root.menu-token;
                 clip-context(id) => { root.clip-context(id); }
                 menu-selected(id) => { root.menu-selected(id); }

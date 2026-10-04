@@ -227,6 +227,9 @@ export global Editor {
     callback razored(id: string, seconds: float);
     in-out property <[MenuItemData]> menu-items;
     in-out property <length> menu-height;
+    in-out property <string> menu-sub-id;
+    in-out property <[MenuItemData]> menu-sub-items;
+    in-out property <length> menu-sub-height;
     in-out property <int> menu-token;
     callback clip-context(id: string);
     callback menu-selected(id: string);

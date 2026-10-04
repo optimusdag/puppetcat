@@ -489,6 +489,7 @@ pub struct Models {
     /// The colour panel's knobs.
     pub adjust_params: Rc<VecModel<AppliedParamData>>,
     pub menu: Rc<VecModel<MenuItemData>>,
+    pub menu_sub: Rc<VecModel<MenuItemData>>,
     pub marker_menu: Rc<VecModel<MenuItemData>>,
     pub timeline_menu: Rc<VecModel<MenuItemData>>,
     /// The export sheet's marker choices, by time.
@@ -531,6 +532,7 @@ impl Models {
             audio_params: Rc::new(VecModel::default()),
             adjust_params: Rc::new(VecModel::default()),
             menu: Rc::new(VecModel::default()),
+            menu_sub: Rc::new(VecModel::default()),
             marker_menu: Rc::new(VecModel::default()),
             timeline_menu: Rc::new(VecModel::default()),
             export_markers: Rc::new(VecModel::default()),
@@ -4661,6 +4663,14 @@ impl Studio {
         let rows = self.menu();
         editor.set_menu_height(Self::menu_height(&rows));
         sync(&models.menu, rows);
+        let sub_rows = self.menu_sub();
+        editor.set_menu_sub_id(if sub_rows.is_empty() {
+            SharedString::new()
+        } else {
+            "transitions".into()
+        });
+        editor.set_menu_sub_height(Self::menu_height(&sub_rows));
+        sync(&models.menu_sub, sub_rows);
         editor.set_menu_token(self.menu_token);
 
         let marker_rows = self.marker_menu();
@@ -4946,24 +4956,14 @@ impl Studio {
             rule(),
         ];
         if clip.kind.is_visual() {
-            // The transition into this clip: the cut with the clip before it.
-            rows.push(heading("Transition in"));
-            let current = clip.transition_in.as_ref().map(|t| t.id.as_str());
-            for info in puppetcat_effects::TRANSITIONS {
-                rows.push(check(
-                    &format!("transition:{}", info.id),
-                    info.name,
-                    "",
-                    current == Some(info.id),
-                    !locked,
-                ));
-            }
+            // The transitions themselves are the submenu this row opens; see
+            // `menu_sub`.
             rows.push(action(
-                "transition-remove",
-                "Remove transition".into(),
-                Glyph::Close,
+                "transitions",
+                "Add in transition\u{2026}".into(),
+                Glyph::Transition,
                 "",
-                current.is_some() && !locked,
+                !locked,
             ));
             rows.push(rule());
         }
@@ -4985,6 +4985,49 @@ impl Studio {
             shortcut: "⌫".into(),
             enabled: !locked,
             danger: true,
+            checkable: false,
+            checked: false,
+        });
+        rows
+    }
+
+    /// The submenu of the clip menu's "Add in transition…" row: every
+    /// transition, ticking the clip's own, and Remove transition. Empty when
+    /// the clip has no such row.
+    fn menu_sub(&self) -> Vec<MenuItemData> {
+        let Some(clip) = self.menu_target.as_ref().and_then(|id| self.clip(id)) else {
+            return Vec::new();
+        };
+        if !clip.kind.is_visual() || self.locked(&clip.track_id) {
+            return Vec::new();
+        }
+        let current = clip.transition_in.as_ref().map(|t| t.id.as_str());
+        let mut rows: Vec<MenuItemData> = puppetcat_effects::TRANSITIONS
+            .iter()
+            .map(|info| MenuItemData {
+                id: format!("transition:{}", info.id).into(),
+                label: info.name.into(),
+                kind: MenuRow::Action,
+                glyph: Glyph::None,
+                shortcut: SharedString::new(),
+                enabled: true,
+                danger: false,
+                checkable: true,
+                checked: current == Some(info.id),
+            })
+            .collect();
+        rows.push(MenuItemData {
+            kind: MenuRow::Separator,
+            ..Default::default()
+        });
+        rows.push(MenuItemData {
+            id: "transition-remove".into(),
+            label: "Remove transition".into(),
+            kind: MenuRow::Action,
+            glyph: Glyph::Close,
+            shortcut: SharedString::new(),
+            enabled: current.is_some(),
+            danger: false,
             checkable: false,
             checked: false,
         });

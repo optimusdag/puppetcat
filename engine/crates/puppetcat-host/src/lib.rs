@@ -21,6 +21,7 @@ pub mod analysis;
 pub mod dirs;
 pub mod export;
 pub mod jobs;
+pub mod lifecycle;
 pub mod lock;
 pub mod media;
 pub mod playback;

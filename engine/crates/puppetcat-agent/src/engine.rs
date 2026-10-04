@@ -206,6 +206,22 @@ pub struct SceneDetection {
     pub warnings: Vec<String>,
 }
 
+/// What `detect_beats` found.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeatDetection {
+    /// What was analysed.
+    pub target: String,
+    /// The tempo, when the beats are regular enough to have one.
+    pub bpm: Option<f64>,
+    /// The beats, earliest first.
+    pub beats: Vec<f64>,
+    /// Markers dropped on the timeline, when asked for.
+    pub markers_added: usize,
+    /// Caveats from the analysis.
+    pub warnings: Vec<String>,
+}
+
 /// Commands as the JSON operations an edit plan takes.
 fn commands_as_operations(commands: &[Command]) -> Vec<serde_json::Value> {
     commands
@@ -721,6 +737,53 @@ impl AgentEngine {
         Ok(SceneDetection {
             target: scan.target,
             cuts: scan.cuts,
+            markers_added,
+            warnings: scan.warnings,
+        })
+    }
+
+    /// Finds the beats in a bin item, one clip, or the timeline's audible mix.
+    /// With `add_markers`, a clip's or the timeline's beats are dropped on the
+    /// timeline as markers in one undoable edit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn detect_beats(
+        &self,
+        media_id: Option<String>,
+        clip_id: Option<String>,
+        start: Option<f64>,
+        end: Option<f64>,
+        sensitivity: f64,
+        add_markers: bool,
+    ) -> Result<BeatDetection, String> {
+        if add_markers && media_id.is_some() {
+            return Err(
+                "addMarkers needs a clipId or the whole timeline: markers live on the timeline"
+                    .to_owned(),
+            );
+        }
+        let revision = self.get_state()?.revision;
+        let scan = analysis::scan_beats(
+            &self.project_snapshot()?,
+            media_id,
+            clip_id,
+            start,
+            end,
+            sensitivity,
+        )?;
+        let mut markers_added = 0;
+        if add_markers && !scan.beats.is_empty() {
+            self.apply_edit_plan(
+                revision,
+                commands_as_operations(&analysis::beat_marker_commands(&scan.beats)),
+                false,
+                true,
+            )?;
+            markers_added = scan.beats.len();
+        }
+        Ok(BeatDetection {
+            target: scan.target,
+            bpm: scan.bpm,
+            beats: scan.beats,
             markers_added,
             warnings: scan.warnings,
         })
@@ -1891,6 +1954,97 @@ mod tests {
             .unwrap_err();
         assert!(voice.contains("download_speech_model"), "{voice}");
         assert!(agent.download_speech_model("nonsense", "x").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detect_beats_finds_a_pulse_and_marks_it_on_the_timeline() {
+        let (root, agent, first) = project_with_clip("beats");
+        agent
+            .apply(Command::RemoveClips {
+                clip_ids: vec![first],
+            })
+            .unwrap();
+        // 8 kHz mono: a 30 ms 1 kHz click every half second for 6 s.
+        let rate = 8000usize;
+        let mut samples = vec![0i16; rate * 6];
+        for beat in 0..12 {
+            let at = beat * rate / 2;
+            for n in 0..(rate * 30 / 1000) {
+                let phase = n as f64 * 1000.0 * std::f64::consts::TAU / rate as f64;
+                samples[at + n] = (phase.sin() * 20000.0) as i16;
+            }
+        }
+        let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        for field in [
+            16u32.to_le_bytes().to_vec(),
+            1u16.to_le_bytes().to_vec(),
+            1u16.to_le_bytes().to_vec(),
+            (rate as u32).to_le_bytes().to_vec(),
+            (rate as u32 * 2).to_le_bytes().to_vec(),
+            2u16.to_le_bytes().to_vec(),
+            16u16.to_le_bytes().to_vec(),
+        ] {
+            wav.extend_from_slice(&field);
+        }
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&data);
+        let path = root.join("clicks.wav");
+        std::fs::write(&path, wav).unwrap();
+        let media = agent
+            .apply(Command::AddMedia {
+                item: puppetcat_project::commands::NewMedia {
+                    path: path.to_string_lossy().into_owned(),
+                    name: "clicks.wav".to_owned(),
+                    duration: Some(6.0),
+                    kind: puppetcat_project::model::MediaKind::Audio,
+                    width: None,
+                    height: None,
+                    frame_rate: None,
+                    frame_rate_fraction: None,
+                    video_codec: None,
+                    audio_codec: None,
+                    has_audio: true,
+                },
+            })
+            .unwrap()
+            .created_id
+            .unwrap();
+        agent
+            .apply(Command::AddClip {
+                media_id: media,
+                track_id: "T1".to_owned(),
+                start: 0.0,
+            })
+            .unwrap();
+
+        let found = agent
+            .detect_beats(None, None, None, None, 0.5, true)
+            .expect("detects");
+        assert!(found.beats.len() >= 10, "{:?}", found.beats);
+        for beat in &found.beats {
+            let off = (beat / 0.5).fract().min(1.0 - (beat / 0.5).fract());
+            assert!(off < 0.1, "{beat} is off the pulse");
+        }
+        assert_eq!(found.bpm, Some(120.0));
+        assert_eq!(found.markers_added, found.beats.len());
+        let markers = agent.get_state().unwrap().project.active().markers.len();
+        assert_eq!(markers, found.beats.len());
+        agent.undo().unwrap();
+        assert!(
+            agent
+                .get_state()
+                .unwrap()
+                .project
+                .active()
+                .markers
+                .is_empty()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

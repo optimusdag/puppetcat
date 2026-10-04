@@ -35,7 +35,7 @@
 * [ ] **Speed Curves / Time Remapping** — Custom speed ramps, reusable velocity presets, and improved slow/fast-motion workflows. *(Partly built: the engine supports speed curves, reverse and constant speed; curve presets and a curve editor are not verified.)*
 * [ ] **Adjustment Layers** — Apply effects, filters, and color adjustments across multiple clips.
 * [ ] **Scene Detection** — Detect cuts in imported footage and optionally split clips automatically. *(Partly built: `detect_scenes` and Clip > Detect scenes find the cuts and mark them; splitting at them automatically is not.)*
-* [ ] **Beat Detection & Beat Markers** — Analyze music and create timeline markers for rhythm-based editing.
+* [x] **Beat Detection & Beat Markers** — Analyze music and create timeline markers for rhythm-based editing. *(Built: `detect_beats` and the window's Mark beats actions find beats and a tempo and drop markers; no rhythm-based auto-editing yet.)*
 * [ ] **Auto Cut / Beat Sync** — Automatically create edits synchronized to music and detected beats.
 
 ### 📝 Captions & Transcript Editing
@@ -51,7 +51,7 @@
 * [x] 🌟 **Noise Removal / Voice Cleanup** — Local audio denoising and speech enhancement. *(Built: the Noise Reduction and Enhance Voice audio effects (FFmpeg `afftdn`).)*
 * [x] **Silence Detection & Removal** — Automatically detect silent regions and optionally remove them from the timeline. *(Built: `analyze_audio` finds it, `remove_silence` and the window's Remove silence sheet cut it.)*
 * [x] **Audio Normalization** — Quickly normalize dialogue and other audio to useful loudness targets. *(Built: the Normalize Loudness audio effect (EBU R128).)*
-* [ ] **Beat Analysis** — Reusable audio analysis infrastructure for beat detection, synchronization, and music-driven effects.
+* [x] **Beat Analysis** — Reusable audio analysis infrastructure for beat detection, synchronization, and music-driven effects. *(Built: the beat detector is reusable analysis in `puppetcat-host`.)*
 
 ### 👁️ Tracking, Masks & Computer Vision
 

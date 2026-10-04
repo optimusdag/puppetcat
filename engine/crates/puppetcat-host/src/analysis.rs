@@ -742,6 +742,138 @@ pub fn marker_commands(cuts: &[SceneCut]) -> Vec<Command> {
         .collect()
 }
 
+/// What a beat scan found.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeatScan {
+    /// What was analysed: `media:<id>`, `clip:<id>` or `timeline:active`.
+    pub target: String,
+    /// The estimated tempo, when the beats are regular enough to have one.
+    pub bpm: Option<f64>,
+    /// Where the beats fall, earliest first: source seconds for a media
+    /// item, timeline seconds otherwise.
+    pub beats: Vec<f64>,
+    /// Caveats from the analysis.
+    pub warnings: Vec<String>,
+}
+
+/// Finds the beats in a bin item, one clip, or the timeline's audible mix:
+/// the places where the sound suddenly gets louder, kept apart by at least a
+/// beat's worth of time. `sensitivity` is `0.0..=1.0`; higher finds softer
+/// onsets and more of them.
+pub fn scan_beats(
+    project: &Project,
+    media_id: Option<String>,
+    clip_id: Option<String>,
+    start: Option<f64>,
+    end: Option<f64>,
+    sensitivity: f64,
+) -> Result<BeatScan, String> {
+    let analysis = analyze_audio(
+        project, media_id, clip_id, start, end, 0.02, -60.0, 1.0, true,
+    )?;
+    let envelope: Vec<(f64, f64)> = analysis
+        .buckets
+        .unwrap_or_default()
+        .iter()
+        .map(|bucket| (bucket.start, bucket.rms_db))
+        .collect();
+    let (beats, bpm) = beats_from_envelope(&envelope, analysis.bucket_seconds, sensitivity);
+    Ok(BeatScan {
+        target: analysis.target,
+        bpm,
+        beats,
+        warnings: analysis.warnings,
+    })
+}
+
+/// The beats in a loudness envelope of `(time, dB)` points `step` seconds
+/// apart, and the tempo they imply. Onset strength is how much louder each
+/// point is than the one before; a beat is an onset that is a local peak,
+/// clearly above the typical onset, and at least 0.25 s after the last beat.
+pub fn beats_from_envelope(
+    envelope: &[(f64, f64)],
+    step: f64,
+    sensitivity: f64,
+) -> (Vec<f64>, Option<f64>) {
+    if envelope.len() < 4 || step <= 0.0 {
+        return (Vec::new(), None);
+    }
+    let strength: Vec<f64> = std::iter::once(0.0)
+        .chain(
+            envelope
+                .windows(2)
+                .map(|pair| (pair[1].1 - pair[0].1).max(0.0)),
+        )
+        .collect();
+    let mean = strength.iter().sum::<f64>() / strength.len() as f64;
+    let deviation =
+        (strength.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / strength.len() as f64).sqrt();
+    // From 1 deviation above the mean at the least sensitive to 0.25 at the
+    // most, and never below a 6 dB jump: quiet noise is not a beat.
+    let bar = (mean + deviation * (1.0 - sensitivity.clamp(0.0, 1.0) * 0.75)).max(6.0);
+    let gap = (0.25 / step).ceil() as usize;
+    let mut picked: Vec<usize> = Vec::new();
+    for index in 1..strength.len() - 1 {
+        let local_peak =
+            strength[index] >= strength[index - 1] && strength[index] > strength[index + 1];
+        if !local_peak || strength[index] < bar {
+            continue;
+        }
+        match picked.last().copied() {
+            Some(last) if index - last < gap => {
+                // Too close: the stronger of the two is the beat.
+                if strength[index] > strength[last] {
+                    picked.pop();
+                    picked.push(index);
+                }
+            }
+            _ => picked.push(index),
+        }
+    }
+    let beats: Vec<f64> = picked.iter().map(|&index| envelope[index].0).collect();
+    (beats.clone(), tempo_of(&beats))
+}
+
+/// The tempo of a run of beats: the median gap, folded into 70-180 BPM, when
+/// at least two thirds of the gaps agree with it to within a tenth.
+fn tempo_of(beats: &[f64]) -> Option<f64> {
+    if beats.len() < 4 {
+        return None;
+    }
+    let mut gaps: Vec<f64> = beats.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    gaps.sort_by(f64::total_cmp);
+    let median = gaps[gaps.len() / 2];
+    let agreeing = gaps
+        .iter()
+        .filter(|gap| (*gap / median - 1.0).abs() < 0.1)
+        .count();
+    if (agreeing as f64) < gaps.len() as f64 * 2.0 / 3.0 {
+        return None;
+    }
+    let mut bpm = 60.0 / median;
+    while bpm < 70.0 {
+        bpm *= 2.0;
+    }
+    while bpm > 180.0 {
+        bpm /= 2.0;
+    }
+    Some((bpm * 10.0).round() / 10.0)
+}
+
+/// The edit that drops a "Beat N" marker at each beat.
+pub fn beat_marker_commands(beats: &[f64]) -> Vec<Command> {
+    beats
+        .iter()
+        .enumerate()
+        .map(|(index, time)| Command::AddMarker {
+            time: *time,
+            name: Some(format!("Beat {}", index + 1)),
+            clip_id: None,
+        })
+        .collect()
+}
+
 /// The spans worth cutting for a set of silent intervals: each shrunk by
 /// `padding` seconds at both ends, so speech keeps a breath of room, with the
 /// ones left under `minimum` seconds dropped. Latest first, which is the
@@ -777,6 +909,28 @@ mod tests {
         let cuts = cuts_from_scores(&scores, 0.1, 0.15, 0.5);
         let times: Vec<f64> = cuts.iter().map(|c| c.time).collect();
         assert_eq!(times, vec![1.0, 3.0]);
+    }
+
+    #[test]
+    fn a_steady_pulse_is_found_as_beats_with_a_tempo() {
+        // A 20 ms envelope at -50 dB with a 20 dB click every half second.
+        let envelope: Vec<(f64, f64)> = (0..500)
+            .map(|i| {
+                let time = i as f64 * 0.02;
+                let on_beat = (time / 0.5).fract() < 0.04 || (time / 0.5).fract() > 0.99;
+                (time, if on_beat { -30.0 } else { -50.0 })
+            })
+            .collect();
+        let (beats, bpm) = beats_from_envelope(&envelope, 0.02, 0.5);
+        assert!(beats.len() >= 18, "{beats:?}");
+        for beat in &beats {
+            let off = (beat / 0.5).fract().min(1.0 - (beat / 0.5).fract());
+            assert!(off < 0.08, "{beat} is not on the pulse");
+        }
+        assert_eq!(bpm, Some(120.0));
+        // Silence has no beats.
+        let flat: Vec<(f64, f64)> = (0..100).map(|i| (i as f64 * 0.02, -50.0)).collect();
+        assert!(beats_from_envelope(&flat, 0.02, 1.0).0.is_empty());
     }
 
     #[test]

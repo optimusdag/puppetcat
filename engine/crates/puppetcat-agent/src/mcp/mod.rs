@@ -227,6 +227,26 @@ pub struct GenerateVoiceParams {
     pub model_id: Option<String>,
 }
 
+/// Parameters for `detect_beats`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectBeatsParams {
+    /// Analyse this bin item; beats come back in source seconds.
+    pub media_id: Option<String>,
+    /// Analyse this active-timeline clip; beats come back in timeline
+    /// seconds. Omit both to analyse the timeline's audible mix.
+    pub clip_id: Option<String>,
+    /// Beginning of the stretch, in the same coordinates as the result.
+    pub start: Option<f64>,
+    /// End of the stretch.
+    pub end: Option<f64>,
+    /// 0..1. Higher finds softer onsets and more beats. Defaults to 0.5.
+    pub sensitivity: Option<f64>,
+    /// Drop a "Beat N" marker at each beat (a clip or the timeline, not a
+    /// bin item), as one undoable edit.
+    pub add_markers: Option<bool>,
+}
+
 /// Filters and inclusion controls for a compact timeline summary.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -739,6 +759,7 @@ impl ConcatAgentServer {
                 "rippleDeleteRange": true,
                 "removeSilence": true,
                 "detectScenes": true,
+                "detectBeats": true,
                 "listCatalogue": true,
                 "speech": true,
                 "batchExport": true,
@@ -986,6 +1007,30 @@ impl ConcatAgentServer {
         })
         .await
         .map_err(|error| to_mcp_err(format!("speech task panicked: {error}")))?
+        .map_err(to_mcp_err)?;
+        ok_json(&result)
+    }
+
+    #[tool(
+        description = "Detect beats in music or speech rhythm: the points where the sound suddenly gets louder, at least a quarter of a second apart. Give a `mediaId` (source seconds), a `clipId` (timeline seconds) or neither (the timeline's audible mix). Returns the beats and, when they are regular, the tempo in BPM. With `addMarkers` (clip or timeline), drops a \"Beat N\" marker at each beat as one undoable edit - the basis for cutting to the beat. Raise `sensitivity` to catch softer beats."
+    )]
+    async fn detect_beats(
+        &self,
+        Parameters(params): Parameters<DetectBeatsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let engine = self.engine.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            engine.detect_beats(
+                params.media_id,
+                params.clip_id,
+                params.start,
+                params.end,
+                params.sensitivity.unwrap_or(0.5).clamp(0.0, 1.0),
+                params.add_markers.unwrap_or(false),
+            )
+        })
+        .await
+        .map_err(|error| to_mcp_err(format!("beat detection task panicked: {error}")))?
         .map_err(to_mcp_err)?;
         ok_json(&result)
     }

@@ -4908,6 +4908,13 @@ impl Studio {
                 clip.kind == model::ClipKind::Video,
             ),
             action(
+                "clip-beats",
+                "Detect beats (mark them)".into(),
+                Glyph::Flag,
+                "",
+                clip.kind != model::ClipKind::Image,
+            ),
+            action(
                 "clip-silence",
                 "Remove silence in clip…".into(),
                 Glyph::Silence,
@@ -5021,6 +5028,7 @@ impl Studio {
             Glyph::Plus,
         )];
         rows.push(row("timeline-silence", "Remove silence…", Glyph::Silence));
+        rows.push(row("timeline-beats", "Mark beats in the timeline", Glyph::Flag));
         if self.range.is_some() {
             rows.push(MenuItemData {
                 kind: MenuRow::Separator,
@@ -5030,6 +5038,11 @@ impl Studio {
                 "range-delete",
                 "Delete range and close the gap",
                 Glyph::RangeCut,
+            ));
+            rows.push(row(
+                "range-beats",
+                "Mark beats in range",
+                Glyph::Flag,
             ));
             rows.push(row(
                 "range-silence",

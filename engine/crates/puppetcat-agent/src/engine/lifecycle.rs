@@ -107,7 +107,11 @@ impl AgentEngine {
             })
             .collect();
         if let Some((old_root, new_root)) = roots {
-            wanted.extend(lifecycle::swap_root(session.project(), &old_root, &new_root));
+            wanted.extend(lifecycle::swap_root(
+                session.project(),
+                &old_root,
+                &new_root,
+            ));
         }
         if wanted.is_empty() {
             return Err("nothing to relink: no entries and no media under oldRoot".to_owned());

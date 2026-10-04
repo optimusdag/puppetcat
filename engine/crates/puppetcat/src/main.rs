@@ -617,6 +617,12 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some((from, to)) = state.range {
                 state.open_silence(studio::SilenceScope::Range(from, to));
             }
+        } else if action.as_str() == "range-beats" {
+            if let Some((from, to)) = state.range {
+                state.mark_beats(studio::SilenceScope::Range(from, to));
+            }
+        } else if action.as_str() == "timeline-beats" {
+            state.mark_beats(studio::SilenceScope::Timeline);
         } else if action.as_str() == "timeline-silence" {
             state.open_silence(studio::SilenceScope::Timeline);
         } else if action.as_str() == "range-export" {
@@ -889,6 +895,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 });
             }
             "clip-scenes" => state.detect_scenes(id),
+            "clip-beats" => state.mark_beats(studio::SilenceScope::Clip(id)),
             "clip-silence" => state.open_silence(studio::SilenceScope::Clip(id)),
             "clip-marker" => {
                 let at = f64::from(state.playhead);

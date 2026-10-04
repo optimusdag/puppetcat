@@ -275,6 +275,42 @@ impl Studio {
         );
     }
 
+    /// Finds the beats in a clip, the ruler selection or the whole timeline's
+    /// sound and drops a marker at each.
+    pub fn mark_beats(&mut self, scope: SilenceScope) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let project = session.project().clone();
+        let revision = session.revision();
+        let (clip, start, end) = match scope {
+            SilenceScope::Timeline => (None, None, None),
+            SilenceScope::Range(from, to) => (None, Some(from), Some(to)),
+            SilenceScope::Clip(id) => (Some(id), None, None),
+        };
+        self.notify("Listening for beats…", false);
+        spawn(
+            move || analysis::scan_beats(&project, None, clip, start, end, 0.5),
+            move |studio, _, _, result| match result {
+                Err(error) => studio.notify(&error, true),
+                Ok(scan) if scan.beats.is_empty() => studio.notify("No beats found", false),
+                Ok(scan) => {
+                    if studio.session.as_ref().map(|s| s.revision()) != Some(revision) {
+                        studio.notify("The timeline changed while listening; try again", true);
+                        return;
+                    }
+                    let count = scan.beats.len();
+                    if studio.apply_all(analysis::beat_marker_commands(&scan.beats)) {
+                        let tempo = scan
+                            .bpm
+                            .map_or(String::new(), |bpm| format!(" \u{b7} about {bpm:.0} BPM"));
+                        studio.notify(&format!("Marked {count} beats{tempo}"), false);
+                    }
+                }
+            },
+        );
+    }
+
     /// The sheet as the window draws it.
     pub fn silence_data(&self) -> SilenceData {
         let state = &self.silence;

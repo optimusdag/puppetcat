@@ -50,7 +50,7 @@ mod cleanup;
 mod files;
 mod ripple;
 pub use files::{ProjectSheet, RelinkState};
-pub use ripple::RippleState;
+pub use ripple::{BookendsState, RippleState};
 pub use cleanup::{SilenceScope, SilenceState};
 
 /// The monitor's output sizes, matching the picker's rows.
@@ -643,6 +643,7 @@ pub struct Studio {
     pub export: ExportState,
     pub silence: SilenceState,
     pub ripple: RippleState,
+    pub bookends: BookendsState,
     pub relink: RelinkState,
     pub project_sheet: ProjectSheet,
     /// The timeline range selection, Shift-dragged on the ruler: seconds
@@ -1039,6 +1040,7 @@ impl Studio {
             export: ExportState::default(),
             silence: SilenceState::default(),
             ripple: RippleState::default(),
+            bookends: BookendsState::default(),
             relink: RelinkState::default(),
             project_sheet: ProjectSheet::default(),
             range: None,
@@ -4637,6 +4639,7 @@ impl Studio {
         app.set_export(self.export_data());
         app.set_silence(self.silence_data());
         app.set_gap(self.gap_data());
+        app.set_bookends(self.bookends_data());
         app.set_project_sheet(self.project_data());
         app.set_relink(self.relink_data());
         sync(&models.relink_rows, self.relink_rows());
@@ -5231,6 +5234,13 @@ impl Studio {
                     "ripple-markers",
                     "Free markers follow",
                     self.ripple.markers,
+                ),
+                row(
+                    "bookends",
+                    "Fade in and out…".into(),
+                    Glyph::Film,
+                    "",
+                    !self.timeline().clips.is_empty(),
                 ),
                 row(
                     "insert-gap",

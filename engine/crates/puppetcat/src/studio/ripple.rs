@@ -14,7 +14,7 @@ use puppetcat_project::Command;
 use puppetcat_project::commands::{LinkPolicy, MarkerPolicy, RipplePolicy};
 
 use super::Studio;
-use crate::ui::GapData;
+use crate::ui::{BookendsData, GapData};
 
 /// The ripple settings and the insert-gap sheet.
 pub struct RippleState {
@@ -28,6 +28,30 @@ pub struct RippleState {
     pub markers: bool,
     pub gap_open: bool,
     pub gap_seconds: f32,
+}
+
+/// The fade-bookends sheet.
+pub struct BookendsState {
+    pub open: bool,
+    pub duration: f32,
+    pub fade: f32,
+    pub shift_all: bool,
+    pub shift_markers: bool,
+    pub error: String,
+}
+
+impl Default for BookendsState {
+    fn default() -> Self {
+        // The defaults the agent's add_fade_to_black tool starts from.
+        Self {
+            open: false,
+            duration: 1.0,
+            fade: 0.5,
+            shift_all: true,
+            shift_markers: true,
+            error: String::new(),
+        }
+    }
 }
 
 impl Default for RippleState {
@@ -143,6 +167,46 @@ impl Studio {
             seconds: self.ripple.gap_seconds,
             at: format!("At {:.2} s", self.playhead).into(),
             scope: scope.into(),
+        }
+    }
+}
+
+impl Studio {
+    /// Adds black at the head and tail of the film, cross-faded in.
+    pub fn apply_bookends(&mut self) {
+        self.echo = None;
+        self.last_commit = None;
+        let state = &self.bookends;
+        let (duration, fade, all, markers) = (
+            f64::from(state.duration),
+            f64::from(state.fade),
+            state.shift_all,
+            state.shift_markers,
+        );
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        match puppetcat_host::bookends::add_fade_to_black(
+            session, None, duration, fade, all, markers,
+        ) {
+            Ok(_) => {
+                self.after_change();
+                self.bookends.open = false;
+                self.bookends.error.clear();
+                self.notify("Added fades at both ends", false);
+            }
+            Err(error) => self.bookends.error = error,
+        }
+    }
+
+    pub fn bookends_data(&self) -> BookendsData {
+        BookendsData {
+            open: self.bookends.open,
+            duration: self.bookends.duration,
+            fade: self.bookends.fade,
+            shift_all: self.bookends.shift_all,
+            shift_markers: self.bookends.shift_markers,
+            error: self.bookends.error.as_str().into(),
         }
     }
 }

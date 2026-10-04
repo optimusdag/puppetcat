@@ -10,11 +10,9 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use puppetcat_core::frame::Frame;
 use puppetcat_host::{Slot, SlotLock};
 use puppetcat_media::ReaderPool;
 use puppetcat_project::Command;
-use puppetcat_project::model::ClipKind;
 
 mod batch;
 mod layouts;
@@ -636,70 +634,14 @@ impl AgentEngine {
     ) -> Result<puppetcat_host::EditorView, String> {
         let mut guard = self.session_lock();
         let session = guard.as_mut().ok_or_else(no_project)?;
-
-        let generated = Path::new(session.path()).join(".puppetcat-generated");
-        std::fs::create_dir_all(&generated)
-            .map_err(|error| format!("could not create {}: {error}", generated.display()))?;
-        let black = generated.join("solid-000000.png");
-        if !black.exists() {
-            let frame = Frame::from_rgba(1, 1, vec![0, 0, 0, 255])
-                .ok_or_else(|| "could not create the black generator frame".to_owned())?;
-            let bytes = puppetcat_media::png(&frame).map_err(|error| error.to_string())?;
-            let partial = generated.join(".solid-000000.png.part");
-            std::fs::write(&partial, bytes)
-                .map_err(|error| format!("could not write {}: {error}", partial.display()))?;
-            std::fs::rename(&partial, &black)
-                .map_err(|error| format!("could not install {}: {error}", black.display()))?;
-        }
-        let path = black.to_string_lossy().into_owned();
-        if !session.project().media.iter().any(|item| item.path == path) {
-            let summary = puppetcat_host::media::probe(&path)?;
-            session
-                .apply(Command::AddMedia {
-                    item: summary.to_new_media(),
-                })
-                .map_err(|error| error.to_string())?;
-        }
-        let media_id = session
-            .project()
-            .media
-            .iter()
-            .find(|item| item.path == path)
-            .map(|item| item.id.clone())
-            .ok_or_else(|| "the generated black media did not enter the bin".to_owned())?;
-        let track_id = match track_id {
-            Some(id) => id,
-            None => {
-                let timeline = session.project().active();
-                timeline
-                    .clips
-                    .iter()
-                    .filter(|clip| {
-                        matches!(clip.kind, ClipKind::Video | ClipKind::Image)
-                            && timeline
-                                .track(&clip.track_id)
-                                .is_some_and(|track| track.visible)
-                    })
-                    .min_by(|left, right| {
-                        left.start
-                            .total_cmp(&right.start)
-                            .then_with(|| right.duration.total_cmp(&left.duration))
-                    })
-                    .map(|clip| clip.track_id.clone())
-                    .ok_or_else(|| "the active timeline has no visible video clip".to_owned())?
-            }
-        };
-        session
-            .apply(Command::AddFadeToBlack {
-                media_id,
-                track_id,
-                duration,
-                transition_duration,
-                shift_all_tracks,
-                shift_free_markers,
-            })
-            .map_err(|error| error.to_string())?;
-        Ok(session.view())
+        puppetcat_host::bookends::add_fade_to_black(
+            session,
+            track_id,
+            duration,
+            transition_duration,
+            shift_all_tracks,
+            shift_free_markers,
+        )
     }
 
     /// A copy of the open project, so analysis can decode media without

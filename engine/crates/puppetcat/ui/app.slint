@@ -26,6 +26,7 @@ import { Modal } from "primitives/modal.slint";
 import { ExportData, ExportDialog, ExportPhase } from "dialogs/export.slint";
 import { SilenceData, SilenceDialog, SilencePhase } from "dialogs/silence.slint";
 import { GapData, GapDialog } from "dialogs/gap.slint";
+import { BookendsData, BookendsDialog } from "dialogs/bookends.slint";
 import { ProjectData, ProjectDialog } from "dialogs/project.slint";
 import { RelinkData, RelinkDialog, RelinkRowData } from "dialogs/relink.slint";
 import { ModelData, SettingsData, SettingsDialog, SystemFactData } from "dialogs/settings.slint";
@@ -55,7 +56,7 @@ export {
     EffectData, MediaFilter, MediaItemData, MediaKind,
     ClipData, ClipField, ClipKind, ClipTextField, DropData, SelectedClipData,
     StageGuideData, StageItemData, TextAlignment, TimelineTabData, TimelineTool,
-    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, SilenceData, SilencePhase, GapData, ProjectData, RelinkData, RelinkRowData, ModelData, SettingsData,
+    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, SilenceData, SilencePhase, GapData, BookendsData, ProjectData, RelinkData, RelinkRowData, ModelData, SettingsData,
     RecentProjectData, StartData, SystemFactData, ToastData,
 }
 
@@ -140,6 +141,13 @@ export component App inherits Window {
     in property <ExportData> export;
     in property <SilenceData> silence;
     in property <GapData> gap;
+    in property <BookendsData> bookends;
+    callback bookends-closed();
+    callback bookends-duration-changed(value: float);
+    callback bookends-fade-changed(value: float);
+    callback bookends-shift-all-toggled(on: bool);
+    callback bookends-shift-markers-toggled(on: bool);
+    callback bookends-apply();
     in property <ProjectData> project-sheet;
     callback project-name-edited(text: string);
     callback project-browse();
@@ -392,6 +400,21 @@ callback export-closed();
         browse-root => { root.relink-browse(); }
         locate(index) => { root.relink-locate(index); }
         apply => { root.relink-apply(); }
+    }
+
+    BookendsDialog {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        data: root.bookends;
+
+        closed => { root.bookends-closed(); }
+        duration-changed(value) => { root.bookends-duration-changed(value); }
+        fade-changed(value) => { root.bookends-fade-changed(value); }
+        shift-all-toggled(on) => { root.bookends-shift-all-toggled(on); }
+        shift-markers-toggled(on) => { root.bookends-shift-markers-toggled(on); }
+        apply => { root.bookends-apply(); }
     }
 
     GapDialog {

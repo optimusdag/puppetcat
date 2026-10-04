@@ -966,6 +966,24 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_relink_apply(on_window!(|state| {
         state.apply_relink();
     }));
+    app.on_bookends_closed(on_window!(|state| {
+        state.bookends.open = false;
+    }));
+    app.on_bookends_duration_changed(on_window!(|state, value: f32| {
+        state.bookends.duration = value;
+    }));
+    app.on_bookends_fade_changed(on_window!(|state, value: f32| {
+        state.bookends.fade = value;
+    }));
+    app.on_bookends_shift_all_toggled(on_window!(|state, on: bool| {
+        state.bookends.shift_all = on;
+    }));
+    app.on_bookends_shift_markers_toggled(on_window!(|state, on: bool| {
+        state.bookends.shift_markers = on;
+    }));
+    app.on_bookends_apply(on_window!(|state| {
+        state.apply_bookends();
+    }));
     app.on_gap_closed(on_window!(|state| {
         state.ripple.gap_open = false;
     }));
@@ -1156,6 +1174,10 @@ fn main() -> Result<(), slint::PlatformError> {
                         "template" => state.save_template(),
                         "project-sheet" => state.open_project_sheet(),
                         "relink" => state.open_relink(),
+                        "bookends" => {
+                            state.bookends.error.clear();
+                            state.bookends.open = true;
+                        }
                         "speech" => state.speak_selected(),
                         "settings" => {
                             state.refresh_models();

@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 PuppetCat contributors
+
+import { Theme } from "../theme/theme.slint";
+import { Glyph } from "../icons.slint";
+import { Button, DialogRow, DialogSection, Modal } from "../primitives/modal.slint";
+import { NumberField } from "../primitives/number-field.slint";
+import { SwitchRow } from "../inspector/controls.slint";
+
+// The fade-bookends sheet: black at the head and the tail of the film,
+// cross-faded into the first and last clips.
+
+export struct BookendsData {
+    open: bool,
+    /// seconds of black at each end
+    duration: float,
+    /// seconds of cross-fade at each cut
+    fade: float,
+    /// every lane moves with the head bookend, so sound stays in sync
+    shift-all: bool,
+    /// free markers move with the content
+    shift-markers: bool,
+    /// why it could not be done
+    error: string,
+}
+
+export component BookendsDialog inherits Modal {
+    in property <BookendsData> data;
+
+    callback duration-changed(value: float);
+    callback fade-changed(value: float);
+    callback shift-all-toggled(on: bool);
+    callback shift-markers-toggled(on: bool);
+    callback apply();
+
+    open: root.data.open;
+    title: "Fade in and out";
+    glyph: Glyph.film;
+    surface-width: 400px;
+
+    VerticalLayout {
+        DialogSection {
+            first: true;
+            title: "Black at both ends";
+
+            DialogRow {
+                label: "Black for";
+                NumberField {
+                    value: root.data.duration;
+                    minimum: 0.1;
+                    maximum: 30;
+                    step: 0.25;
+                    precision: 2;
+                    suffix: " s";
+                    changed(v) => { root.duration-changed(v); }
+                }
+            }
+
+            DialogRow {
+                label: "Fade over";
+                NumberField {
+                    value: root.data.fade;
+                    minimum: 0.1;
+                    maximum: 30;
+                    step: 0.25;
+                    precision: 2;
+                    suffix: " s";
+                    changed(v) => { root.fade-changed(v); }
+                }
+            }
+
+            SwitchRow {
+                label: "Keep every lane in sync";
+                checked: root.data.shift-all;
+                toggled(on) => { root.shift-all-toggled(on); }
+            }
+
+            SwitchRow {
+                label: "Free markers follow";
+                checked: root.data.shift-markers;
+                toggled(on) => { root.shift-markers-toggled(on); }
+            }
+
+            if root.data.error != "": Text {
+                text: root.data.error;
+                color: Theme.danger;
+                font-size: Theme.fs-sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                Button {
+                    block: true;
+                    primary: true;
+                    large: true;
+                    label: "Add fades";
+                    clicked => { root.apply(); }
+                }
+            }
+        }
+    }
+}

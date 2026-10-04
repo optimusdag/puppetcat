@@ -18,6 +18,7 @@
 //! and cancels through flags, and the caller decides which thread it runs on.
 
 pub mod analysis;
+pub mod bookends;
 pub mod dirs;
 pub mod export;
 pub mod jobs;

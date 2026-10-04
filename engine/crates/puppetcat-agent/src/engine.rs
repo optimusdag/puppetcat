@@ -590,6 +590,24 @@ impl AgentEngine {
             &std::env::temp_dir(),
             "Free space or fix permissions on the system temp directory.",
         );
+        let renderer = puppetcat_export::renderer();
+        checks.push(HealthCheck {
+            name: "renderer",
+            code: if renderer == "gpu" {
+                "renderer_gpu"
+            } else {
+                "renderer_cpu"
+            },
+            ok: true,
+            message: if renderer == "gpu" {
+                "exports and snapshots are drawn on the GPU, like the window".to_owned()
+            } else {
+                "no graphics adapter was found: exports and snapshots are drawn on the CPU, \
+                 and effects that only have a shader are not applied"
+                    .to_owned()
+            },
+            remediation: None,
+        });
         let guard = self.session_lock();
         checks.push(match guard.as_ref() {
             Some(open) => HealthCheck {
@@ -2045,6 +2063,20 @@ mod tests {
                 .markers
                 .is_empty()
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_health_check_says_which_renderer_the_agent_draws_with() {
+        let (root, agent, _clip) = project_with_clip("renderer");
+        let report = agent.health_check();
+        let renderer = report
+            .checks
+            .iter()
+            .find(|check| check.name == "renderer")
+            .expect("a renderer check");
+        assert!(matches!(renderer.code, "renderer_gpu" | "renderer_cpu"));
+        assert!(renderer.ok, "no GPU is not a failure, only a slower path");
         let _ = std::fs::remove_dir_all(&root);
     }
 

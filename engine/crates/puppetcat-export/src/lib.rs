@@ -993,7 +993,7 @@ fn place_layer<'a>(
 /// The best compositor this machine offers: the GPU when the `gpu` feature is
 /// on and the machine has one, the CPU reference otherwise. Never an error -
 /// a machine with no adapter renders slower, not not-at-all.
-fn best_compositor() -> (Box<dyn Compositor>, bool) {
+fn best_compositor() -> (Box<dyn Compositor + Send>, bool) {
     #[cfg(feature = "gpu")]
     if let Some(gpu) = puppetcat_render::WgpuCompositor::new() {
         return (Box::new(gpu), true);
@@ -1627,11 +1627,33 @@ pub fn preview_frame(
     pool: &puppetcat_media::ReaderPool,
     request: &PreviewFrameRequest,
 ) -> Result<Vec<u8>, String> {
-    let sources = preview_sources(pool, request, false)?;
-    // CPU on purpose: one frame at preview size is milliseconds, and holding
-    // a GPU context alive for occasional scrubs is not worth its memory. The
-    // window composites on its own device through `preview_sources`.
-    Ok(sources.composite(&mut CpuCompositor).into_pixels())
+    // The shared compositor, so a caller that asks for several frames (a
+    // contact sheet, a run of snapshots) creates the GPU context once.
+    let mut guard = preview_compositor()
+        .lock()
+        .map_err(|_| "the preview compositor is unavailable".to_owned())?;
+    let (compositor, gpu) = &mut *guard;
+    let sources = preview_sources(pool, request, *gpu)?;
+    Ok(sources.composite(&mut **compositor).into_pixels())
+}
+
+/// The best compositor the machine has, made once and kept: the GPU where
+/// there is one - so a frame drawn by [`preview_frame`] matches the window's,
+/// shader effects included - and the CPU reference where there is not.
+/// Creating a GPU context costs far more than drawing a frame on it.
+fn preview_compositor() -> &'static std::sync::Mutex<(Box<dyn Compositor + Send>, bool)> {
+    static COMPOSITOR: std::sync::OnceLock<std::sync::Mutex<(Box<dyn Compositor + Send>, bool)>> =
+        std::sync::OnceLock::new();
+    COMPOSITOR.get_or_init(|| std::sync::Mutex::new(best_compositor()))
+}
+
+/// Which renderer [`preview_frame`] and a full export draw with on this
+/// machine, for diagnostics: `"gpu"` or `"cpu"`.
+pub fn renderer() -> &'static str {
+    match preview_compositor().lock() {
+        Ok(guard) if guard.1 => "gpu",
+        _ => "cpu",
+    }
 }
 
 /// The decoded pictures under the playhead and where each goes: what a

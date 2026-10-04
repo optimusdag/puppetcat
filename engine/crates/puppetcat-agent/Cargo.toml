@@ -15,7 +15,10 @@ puppetcat-core.workspace = true
 puppetcat-media.workspace = true
 puppetcat-project.workspace = true
 puppetcat-export.workspace = true
-puppetcat-host.workspace = true
+# The GPU compositor, so the agent's exports and snapshots are drawn by the
+# same renderer as the window's (falling back to the CPU where there is no
+# graphics adapter).
+puppetcat-host = { workspace = true, features = ["gpu"] }
 puppetcat-effects.workspace = true
 puppetcat-speech.workspace = true
 serde = { version = "1", features = ["derive"] }

@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 use puppetcat_core::time::{FrameRate, Rational};
 use puppetcat_core::timeline::{Clip, MediaRef, Timeline, Track, TrackKind};
 use puppetcat_media::{EncodeOptions, Encoder, FrameSink, ReaderPool};
-use puppetcat_render::{Compositor, CpuCompositor, Layer, plan_frame};
+use puppetcat_render::{Compositor, CpuCompositor, Layer, WgpuCompositor, plan_frame};
 
 #[derive(Parser)]
 #[command(name = "puppetcat-cli", version, about = "Concat engine command line")]
@@ -108,9 +108,20 @@ fn render(input: &PathBuf, output: &PathBuf, frames: u64, fade: u64) -> Result<(
 
     let pool = ReaderPool::with_defaults();
     let mut encoder = Encoder::create(output, width, height, rate, &EncodeOptions::default())?;
-    let mut compositor = CpuCompositor;
+    // The GPU where the machine has one, as the window and the agent do; the
+    // CPU reference otherwise.
+    let mut gpu = WgpuCompositor::new();
+    let on_gpu = gpu.is_some();
+    let mut cpu = CpuCompositor;
+    let compositor: &mut dyn Compositor = match gpu.as_mut() {
+        Some(gpu) => gpu,
+        None => &mut cpu,
+    };
 
-    println!("rendering {frames} frames at {width}x{height} {rate}");
+    println!(
+        "rendering {frames} frames at {width}x{height} {rate} on the {}",
+        if on_gpu { "GPU" } else { "CPU" }
+    );
 
     for index in 0..frames {
         let plan = plan_frame(&timeline, rate.time_of_frame(index as i64));

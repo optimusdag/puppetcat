@@ -27,6 +27,7 @@ use puppetcat_host::{AppDirs, Session};
 use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResponse};
 use rmcp::service::{RoleClient, RunningService};
+#[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 
@@ -115,6 +116,7 @@ impl Drop for WindowBridge {
 /// Starts serving the agent's tools on `socket`, working on whatever session
 /// `provider` lends. Replaces a stale socket left by a window that crashed.
 /// The returned handle keeps it running.
+#[cfg(unix)]
 pub fn host(
     socket: &Path,
     engine: Arc<AgentEngine>,
@@ -161,6 +163,21 @@ pub fn host(
     })
 }
 
+/// Starts serving the agent's tools on `socket`. Not available off Unix, where
+/// the bridge's local sockets do not exist: the window works without it and the
+/// stand-alone server does its own work, as it always did.
+#[cfg(not(unix))]
+pub fn host(
+    _socket: &Path,
+    _engine: Arc<AgentEngine>,
+    _provider: Arc<dyn SessionProvider>,
+) -> std::io::Result<WindowBridge> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "the agent bridge needs Unix sockets",
+    ))
+}
+
 /// The stand-alone server's way to a window: a connection to its socket,
 /// opened when first needed and kept for the calls that follow.
 pub struct Forwarder {
@@ -197,6 +214,13 @@ impl Forwarder {
     }
 
     /// Sends `request` to the window, if one is running.
+    #[cfg(not(unix))]
+    pub async fn forward(&self, _request: &CallToolRequestParams) -> Forwarded {
+        Forwarded::NoWindow
+    }
+
+    /// Sends `request` to the window, if one is running.
+    #[cfg(unix)]
     pub async fn forward(&self, request: &CallToolRequestParams) -> Forwarded {
         let mut slot = self.client.lock().await;
         if slot.as_ref().is_some_and(|client| client.is_closed()) {
@@ -223,7 +247,7 @@ impl Forwarder {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::sync::Mutex as StdMutex;
 

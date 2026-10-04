@@ -353,6 +353,16 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
                     Handle::Overlap(d) => clips[cut.incoming].video_fade_in = d,
                     Handle::Short => {}
                     Handle::Missing => {
+                        // The outgoing clip may still have footage past its
+                        // out-point (or be a still, like the black of a
+                        // fade): let it run on under the incoming clip's head
+                        // for a true dissolve between the two pictures.
+                        if let Some(d) =
+                            extend_tail(clips, cut.outgoing, cut.incoming, cut.duration, frame)
+                        {
+                            clips[cut.incoming].video_fade_in = d;
+                            continue;
+                        }
                         // No handle to borrow without surfacing the cut: dip
                         // through black instead, using only footage each clip
                         // already shows - the outgoing clip's real tail
@@ -2973,6 +2983,35 @@ mod tests {
         assert_eq!(clips[1].start, 2.0, "the cut is not moved");
         assert_eq!(clips[0].motion_out, Some((MotionKind::Push, 0.5)));
         assert_eq!(clips[1].motion_in, Some((MotionKind::Push, 0.5)));
+    }
+
+    #[test]
+    fn the_black_at_each_end_of_a_fade_is_the_same_size() {
+        // Black stills either side of a film, as Fade in and out lays them.
+        let mut clips = vec![
+            clip("image", 0, 0.0, 1.0, 0.0),
+            clip("video", 0, 1.0, 10.0, 0.0),
+            clip("image", 0, 11.0, 1.0, 0.0),
+        ];
+        clips[1].transition = spec("cross-fade", 0.5);
+        clips[2].transition = spec("cross-fade", 0.5);
+        resolve_transitions(&mut clips, FrameRate::THIRTY, false);
+        let (intro, film, outro) = (&clips[0], &clips[1], &clips[2]);
+        // Each black runs its second for itself and half a second under the
+        // film's dissolve: 1.5 s of black at either end.
+        assert_eq!(intro.duration, 1.5);
+        assert_eq!(outro.duration, 1.5);
+        assert_eq!(
+            intro.start + intro.duration,
+            1.5,
+            "the head's black ends 1.5 s in"
+        );
+        assert_eq!(
+            outro.start, 10.5,
+            "the tail's black starts 1.5 s from the end"
+        );
+        assert_eq!(film.video_fade_in, 0.5);
+        assert_eq!(outro.video_fade_in, 0.5);
     }
 
     #[test]

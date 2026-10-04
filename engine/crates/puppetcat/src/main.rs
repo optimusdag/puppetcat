@@ -125,8 +125,8 @@ fn main() -> Result<(), slint::PlatformError> {
         app.set_export_markers(ModelRc::from(models.export_markers.clone()));
         app.set_export_sizes(ModelRc::from(models.export_sizes.clone()));
         app.set_relink_rows(ModelRc::from(models.relink_rows.clone()));
-    app.set_batch_rows(ModelRc::from(models.batch_rows.clone()));
-    app.set_layout_rows(ModelRc::from(models.layout_rows.clone()));
+        app.set_batch_rows(ModelRc::from(models.batch_rows.clone()));
+        app.set_layout_rows(ModelRc::from(models.layout_rows.clone()));
         editor.set_stage_items(ModelRc::from(models.stage.clone()));
         editor.set_stage_guides(ModelRc::from(models.guides.clone()));
         editor.set_media(ModelRc::from(models.media.clone()));
@@ -623,8 +623,13 @@ fn main() -> Result<(), slint::PlatformError> {
             if let Some((from, to)) = state.range {
                 state.mark_beats(studio::SilenceScope::Range(from, to));
             }
+        } else if action.as_str() == "range-cut-beats" {
+            let range = state.range;
+            state.cut_to_beats(vec![], range);
         } else if action.as_str() == "timeline-beats" {
             state.mark_beats(studio::SilenceScope::Timeline);
+        } else if action.as_str() == "timeline-cut-beats" {
+            state.cut_to_beats(vec![], None);
         } else if action.as_str() == "timeline-silence" {
             state.open_silence(studio::SilenceScope::Timeline);
         } else if action.as_str() == "range-export" {
@@ -902,6 +907,7 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             "clip-scenes" => state.detect_scenes(id),
             "clip-beats" => state.mark_beats(studio::SilenceScope::Clip(id)),
+            "clip-cut-beats" => state.cut_to_beats(vec![id], None),
             "clip-silence" => state.open_silence(studio::SilenceScope::Clip(id)),
             "clip-marker" => {
                 let at = f64::from(state.playhead);

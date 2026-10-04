@@ -311,6 +311,51 @@ impl Studio {
         );
     }
 
+    /// Splits the requested visual clips at existing beat markers. An empty
+    /// request means every unlocked visual clip; all cuts are one Undo step.
+    pub fn cut_to_beats(&mut self, requested: Vec<String>, range: Option<(f64, f64)>) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        let project = session.project();
+        let clip_ids: Vec<String> = project
+            .active()
+            .clips
+            .iter()
+            .filter(|clip| {
+                clip.kind.is_visual()
+                    && !self.locked(&clip.track_id)
+                    && (requested.is_empty() || requested.contains(&clip.id))
+            })
+            .map(|clip| clip.id.clone())
+            .collect();
+        if clip_ids.is_empty() {
+            self.notify("There are no unlocked visual clips to cut", false);
+            return;
+        }
+        let (start, end) = range.map_or((None, None), |(from, to)| (Some(from), Some(to)));
+        match analysis::cut_to_beats(project, &clip_ids, start, end) {
+            Err(error) => self.notify(&error, true),
+            Ok(plan) if plan.commands.is_empty() => {
+                self.notify("No beat markers cross those clips", false)
+            }
+            Ok(plan) => {
+                let beats = plan.beats_used;
+                let splits = plan.splits;
+                if self.apply_all(plan.commands) {
+                    self.notify(
+                        &format!(
+                            "Cut {splits} clip{} on {beats} beat{}",
+                            if splits == 1 { "" } else { "s" },
+                            if beats == 1 { "" } else { "s" }
+                        ),
+                        false,
+                    );
+                }
+            }
+        }
+    }
+
     /// The sheet as the window draws it.
     pub fn silence_data(&self) -> SilenceData {
         let state = &self.silence;

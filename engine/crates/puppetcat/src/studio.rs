@@ -30,12 +30,12 @@ use puppetcat_host::playback::ClipSpec;
 use puppetcat_host::preview::FrameSpec;
 use puppetcat_host::{ProjectInfo, Session, Slot, SlotLock, media, projects, templates};
 use puppetcat_media::Peaks;
-use puppetcat_speech::edits;
 use puppetcat_project::commands::{ClipMove, ClipPatch, TrackFlag, TrimEdge};
 use puppetcat_project::model::{
     self, AppliedFilter, Clip, Marker, Project, TextAlign, TextStyle, Timeline, Track, Transition,
 };
 use puppetcat_project::{Command, why_not_merge};
+use puppetcat_speech::edits;
 use slint::{Model, SharedString, VecModel};
 
 use crate::dock::{
@@ -53,11 +53,11 @@ mod files;
 mod layouts;
 mod ripple;
 mod slots;
+pub use batch::BatchState;
+pub use cleanup::{SilenceScope, SilenceState};
 pub use files::{ProjectSheet, RelinkState};
 pub use layouts::LayoutsState;
 pub use ripple::{BookendsState, RippleState};
-pub use batch::BatchState;
-pub use cleanup::{SilenceScope, SilenceState};
 
 /// The monitor's output sizes, matching the picker's rows.
 pub const OUTPUTS: [(i32, i32); 6] = [
@@ -2044,7 +2044,10 @@ impl Studio {
         }
         let value = transition.map(|id| Transition {
             id: id.to_owned(),
-            duration: clip.transition_in.as_ref().map_or(0.5, |held| held.duration),
+            duration: clip
+                .transition_in
+                .as_ref()
+                .map_or(0.5, |held| held.duration),
         });
         self.apply(Command::UpdateClip {
             clip_id: clip_id.to_owned(),
@@ -4970,6 +4973,13 @@ impl Studio {
                 clip.kind != model::ClipKind::Image,
             ),
             action(
+                "clip-cut-beats",
+                "Cut clip to beat markers".into(),
+                Glyph::Split,
+                "",
+                clip.kind.is_visual() && !locked,
+            ),
+            action(
                 "clip-silence",
                 "Remove silence in clip…".into(),
                 Glyph::Silence,
@@ -5138,7 +5148,16 @@ impl Studio {
             Glyph::Plus,
         )];
         rows.push(row("timeline-silence", "Remove silence…", Glyph::Silence));
-        rows.push(row("timeline-beats", "Mark beats in the timeline", Glyph::Flag));
+        rows.push(row(
+            "timeline-beats",
+            "Mark beats in the timeline",
+            Glyph::Flag,
+        ));
+        rows.push(row(
+            "timeline-cut-beats",
+            "Cut video to beat markers",
+            Glyph::Split,
+        ));
         if self.range.is_some() {
             rows.push(MenuItemData {
                 kind: MenuRow::Separator,
@@ -5149,10 +5168,11 @@ impl Studio {
                 "Delete range and close the gap",
                 Glyph::RangeCut,
             ));
+            rows.push(row("range-beats", "Mark beats in range", Glyph::Flag));
             rows.push(row(
-                "range-beats",
-                "Mark beats in range",
-                Glyph::Flag,
+                "range-cut-beats",
+                "Cut video to beat markers in range",
+                Glyph::Split,
             ));
             rows.push(row(
                 "range-silence",
@@ -5391,23 +5411,9 @@ impl Studio {
                 rule(),
                 check("ripple", "Ripple edit", self.ripple.on),
                 check("ripple-all", "Ripple all lanes", self.ripple.all_lanes),
-                check(
-                    "ripple-linked",
-                    "Linked audio follows",
-                    self.ripple.linked,
-                ),
-                check(
-                    "ripple-markers",
-                    "Free markers follow",
-                    self.ripple.markers,
-                ),
-                row(
-                    "layouts",
-                    "Layouts…".into(),
-                    Glyph::Frame,
-                    "",
-                    true,
-                ),
+                check("ripple-linked", "Linked audio follows", self.ripple.linked),
+                check("ripple-markers", "Free markers follow", self.ripple.markers),
+                row("layouts", "Layouts…".into(), Glyph::Frame, "", true),
                 row(
                     "bookends",
                     "Fade in and out…".into(),

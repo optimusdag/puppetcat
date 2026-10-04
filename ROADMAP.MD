@@ -36,7 +36,7 @@
 * [ ] **Adjustment Layers** — Apply effects, filters, and color adjustments across multiple clips.
 * [ ] **Scene Detection** — Detect cuts in imported footage and optionally split clips automatically. *(Partly built: `detect_scenes` and Clip > Detect scenes find the cuts and mark them; splitting at them automatically is not.)*
 * [x] **Beat Detection & Beat Markers** — Analyze music and create timeline markers for rhythm-based editing. *(Built: `detect_beats` and the window's Mark beats actions find beats and a tempo and drop markers; no rhythm-based auto-editing yet.)*
-* [ ] **Auto Cut / Beat Sync** — Automatically create edits synchronized to music and detected beats.
+* [x] **Auto Cut / Beat Sync** — Automatically create edits synchronized to music and detected beats. *(Built: `cut_to_beats` and the window's Cut video to beat markers actions split visual clips at detected beat markers as one undoable edit, with clip and range scopes.)*
 
 ### 📝 Captions & Transcript Editing
 

@@ -222,6 +222,18 @@ pub struct BeatDetection {
     pub warnings: Vec<String>,
 }
 
+/// What `cut_to_beats` planned and changed.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeatCutResult {
+    /// Beat markers which crossed at least one target clip.
+    pub beats_used: usize,
+    /// Total clip pieces created.
+    pub splits: usize,
+    /// The transactional edit report; absent when no marker crossed a clip.
+    pub plan: Option<EditPlanResult>,
+}
+
 /// Commands as the JSON operations an edit plan takes.
 fn commands_as_operations(commands: &[Command]) -> Vec<serde_json::Value> {
     commands
@@ -855,6 +867,34 @@ impl AgentEngine {
             beats: scan.beats,
             markers_added,
             warnings: scan.warnings,
+        })
+    }
+
+    /// Splits visual clips at existing `Beat …` timeline markers. With no
+    /// clip ids, every visual clip is eligible. The cuts are one undo step.
+    pub fn cut_to_beats(
+        &self,
+        clip_ids: Vec<String>,
+        start: Option<f64>,
+        end: Option<f64>,
+        dry_run: bool,
+    ) -> Result<BeatCutResult, String> {
+        let revision = self.get_state()?.revision;
+        let cuts = analysis::cut_to_beats(&self.project_snapshot()?, &clip_ids, start, end)?;
+        let plan = if cuts.commands.is_empty() {
+            None
+        } else {
+            Some(self.apply_edit_plan(
+                revision,
+                commands_as_operations(&cuts.commands),
+                dry_run,
+                true,
+            )?)
+        };
+        Ok(BeatCutResult {
+            beats_used: cuts.beats_used,
+            splits: cuts.splits,
+            plan,
         })
     }
 
@@ -2114,6 +2154,48 @@ mod tests {
                 .markers
                 .is_empty()
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cut_to_beats_splits_one_clip_many_times_as_one_undoable_edit() {
+        let (root, agent, clip) = project_with_clip("cut-to-beats");
+        for (name, time) in [
+            ("Beat 1", 2.0),
+            ("Beat 2", 4.0),
+            ("note", 5.0),
+            ("Beat 3", 6.0),
+        ] {
+            agent
+                .apply(Command::AddMarker {
+                    time,
+                    name: Some(name.to_owned()),
+                    clip_id: None,
+                })
+                .unwrap();
+        }
+
+        let dry = agent
+            .cut_to_beats(vec![clip.clone()], None, None, true)
+            .expect("plans");
+        assert_eq!((dry.beats_used, dry.splits), (3, 3));
+        assert!(dry.plan.is_some_and(|plan| !plan.committed));
+        assert_eq!(agent.get_state().unwrap().project.active().clips.len(), 1);
+
+        let done = agent
+            .cut_to_beats(vec![clip], Some(3.0), Some(7.0), false)
+            .expect("cuts");
+        assert_eq!((done.beats_used, done.splits), (2, 2));
+        assert!(done.plan.is_some_and(|plan| plan.committed));
+        let state = agent.get_state().unwrap();
+        let clips = &state.project.active().clips;
+        assert_eq!(clips.len(), 3);
+        assert_eq!(
+            clips.iter().map(|clip| clip.duration).collect::<Vec<_>>(),
+            vec![4.0, 2.0, 4.0]
+        );
+        agent.undo().unwrap();
+        assert_eq!(agent.get_state().unwrap().project.active().clips.len(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 

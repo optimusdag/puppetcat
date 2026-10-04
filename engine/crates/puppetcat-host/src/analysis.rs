@@ -874,6 +874,89 @@ pub fn beat_marker_commands(beats: &[f64]) -> Vec<Command> {
         .collect()
 }
 
+/// The edit plan and useful counts for cutting picture at beat markers.
+#[derive(Clone, Debug)]
+pub struct BeatCutPlan {
+    /// Commands are latest first so a clip's stable head id can be split
+    /// repeatedly without referring to the freshly minted tails.
+    pub commands: Vec<Command>,
+    /// Beat markers which cut at least one target clip.
+    pub beats_used: usize,
+    /// Total clip splits the commands will make.
+    pub splits: usize,
+}
+
+/// Builds the cuts which synchronize visual clips to existing `Beat …`
+/// markers. An empty `clip_ids` selects every visual clip; otherwise it is
+/// an explicit allow-list. The optional range filters markers, not clips.
+pub fn cut_to_beats(
+    project: &Project,
+    clip_ids: &[String],
+    start: Option<f64>,
+    end: Option<f64>,
+) -> Result<BeatCutPlan, String> {
+    if start.is_some_and(|value| !value.is_finite()) || end.is_some_and(|value| !value.is_finite())
+    {
+        return Err("start and end must be finite".to_owned());
+    }
+    if matches!((start, end), (Some(from), Some(to)) if to <= from) {
+        return Err("end must be after start".to_owned());
+    }
+    let timeline = project.active();
+    if !clip_ids.is_empty() {
+        for id in clip_ids {
+            let clip = timeline
+                .clip(id)
+                .ok_or_else(|| format!("clip {id:?} is not on the active timeline"))?;
+            if !clip.kind.is_visual() {
+                return Err(format!("clip {id:?} is not a visual clip"));
+            }
+        }
+    }
+    let selected = |id: &str| clip_ids.is_empty() || clip_ids.iter().any(|item| item == id);
+    let minimum = 1.0 / 60.0;
+    let mut beats: Vec<f64> = timeline
+        .markers
+        .iter()
+        .filter(|marker| {
+            marker.name.to_ascii_lowercase().starts_with("beat ")
+                && start.is_none_or(|from| marker.time >= from)
+                && end.is_none_or(|to| marker.time <= to)
+        })
+        .map(|marker| marker.time)
+        .collect();
+    beats.sort_by(|left, right| right.total_cmp(left));
+    beats.dedup_by(|left, right| (*left - *right).abs() < 1e-6);
+
+    let mut commands = Vec::new();
+    let mut splits = 0;
+    for time in beats {
+        let victims: Vec<String> = timeline
+            .clips
+            .iter()
+            .filter(|clip| {
+                clip.kind.is_visual()
+                    && selected(&clip.id)
+                    && clip.start + minimum < time
+                    && time < clip.start + clip.duration - minimum
+            })
+            .map(|clip| clip.id.clone())
+            .collect();
+        if !victims.is_empty() {
+            splits += victims.len();
+            commands.push(Command::SplitClips {
+                clip_ids: victims,
+                time,
+            });
+        }
+    }
+    Ok(BeatCutPlan {
+        beats_used: commands.len(),
+        commands,
+        splits,
+    })
+}
+
 /// The spans worth cutting for a set of silent intervals: each shrunk by
 /// `padding` seconds at both ends, so speech keeps a breath of room, with the
 /// ones left under `minimum` seconds dropped. Latest first, which is the

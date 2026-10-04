@@ -247,6 +247,22 @@ pub struct DetectBeatsParams {
     pub add_markers: Option<bool>,
 }
 
+/// Parameters for `cut_to_beats`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CutToBeatsParams {
+    /// Visual clips to split. Omit or pass an empty list for every visual
+    /// clip on the active timeline.
+    #[serde(default)]
+    pub clip_ids: Vec<String>,
+    /// Use beat markers at or after this timeline second.
+    pub start: Option<f64>,
+    /// Use beat markers at or before this timeline second.
+    pub end: Option<f64>,
+    /// Report the edit without changing the project. Defaults to false.
+    pub dry_run: Option<bool>,
+}
+
 /// Filters and inclusion controls for a compact timeline summary.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1069,6 +1085,24 @@ impl ConcatAgentServer {
         .map_err(|error| to_mcp_err(format!("beat detection task panicked: {error}")))?
         .map_err(to_mcp_err)?;
         ok_json(&result)
+    }
+
+    #[tool(
+        description = "Split visual clips at the active timeline's existing \"Beat …\" markers, as one undoable edit. By default every visual clip is eligible; pass clipIds to limit the cut, or start/end to use only markers in a range. Mark beats first with detect_beats(addMarkers: true). Runs latest-to-earliest internally so one long clip can be cut at every beat. Use dryRun to inspect counts and the edit diff without committing."
+    )]
+    fn cut_to_beats(
+        &self,
+        Parameters(params): Parameters<CutToBeatsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.engine
+            .cut_to_beats(
+                params.clip_ids,
+                params.start,
+                params.end,
+                params.dry_run.unwrap_or(false),
+            )
+            .map_err(to_mcp_err)
+            .and_then(|result| ok_json(&result))
     }
 
     #[tool(

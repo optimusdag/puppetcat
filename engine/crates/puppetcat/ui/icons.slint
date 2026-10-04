@@ -101,6 +101,7 @@ export enum Glyph {
     // cutting time out
     range-cut,
     silence,
+    ripple,
     // the start screen
     info,
     folder,
@@ -472,6 +473,12 @@ export component Icon inherits Rectangle {
     if root.glyph == Glyph.silence: Stroked {
         size: root.size; tint: root.tint; weight: root.weight;
         commands: "M2 10.5v3 M6 7v10 M18 7v10 M22 10.5v3 M9.5 12h5";
+    }
+
+    // lucide/move-horizontal: everything after the edit moves with it.
+    if root.glyph == Glyph.ripple: Stroked {
+        size: root.size; tint: root.tint; weight: root.weight;
+        commands: "M18 8l4 4-4 4 M2 12h20 M6 8l-4 4 4 4";
     }
 
     // lucide/type

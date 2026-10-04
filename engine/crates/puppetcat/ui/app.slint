@@ -25,6 +25,7 @@ import { ContextMenu, MenuItemData, MenuRow } from "primitives/context-menu.slin
 import { Modal } from "primitives/modal.slint";
 import { ExportData, ExportDialog, ExportPhase } from "dialogs/export.slint";
 import { SilenceData, SilenceDialog, SilencePhase } from "dialogs/silence.slint";
+import { GapData, GapDialog } from "dialogs/gap.slint";
 import { ModelData, SettingsData, SettingsDialog, SystemFactData } from "dialogs/settings.slint";
 import { DockDivider, DockSide, SeatBox } from "dock.slint";
 import { Editor } from "editor.slint";
@@ -52,7 +53,7 @@ export {
     EffectData, MediaFilter, MediaItemData, MediaKind,
     ClipData, ClipField, ClipKind, ClipTextField, DropData, SelectedClipData,
     StageGuideData, StageItemData, TextAlignment, TimelineTabData, TimelineTool,
-    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, SilenceData, SilencePhase, ModelData, SettingsData,
+    TrackData, TrackSize, MenuItemData, MenuRow, ExportData, ExportPhase, SilenceData, SilencePhase, GapData, ModelData, SettingsData,
     RecentProjectData, StartData, SystemFactData, ToastData,
 }
 
@@ -136,6 +137,10 @@ export component App inherits Window {
     // everything.
     in property <ExportData> export;
     in property <SilenceData> silence;
+    in property <GapData> gap;
+    callback gap-closed();
+    callback gap-seconds-changed(value: float);
+    callback gap-apply();
     callback silence-closed();
     callback silence-threshold-changed(value: float);
     callback silence-min-changed(value: float);
@@ -341,6 +346,18 @@ callback export-closed();
         cancel => { root.export-cancel(); }
         reveal => { root.export-reveal(); }
         again => { root.export-again(); }
+    }
+
+    GapDialog {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        data: root.gap;
+
+        closed => { root.gap-closed(); }
+        seconds-changed(value) => { root.gap-seconds-changed(value); }
+        apply => { root.gap-apply(); }
     }
 
     SilenceDialog {

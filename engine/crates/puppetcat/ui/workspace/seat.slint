@@ -258,6 +258,7 @@ export component Seat inherits Rectangle {
             markers: Editor.markers;
             tool: Editor.tool;
             snap: Editor.snap;
+            ripple: Editor.ripple;
             selected-count: Editor.selected-count;
             merge-blocked-because: Editor.merge-blocked-because;
             has-av-tools: Editor.has-av-tools;
@@ -272,6 +273,7 @@ export component Seat inherits Rectangle {
             tab-added => { Editor.tab-added(); }
             tool-changed(tool) => { Editor.tool-changed(tool); }
             snap-changed(snap) => { Editor.snap-changed(snap); }
+            ripple-changed(ripple) => { Editor.ripple-changed(ripple); }
             split => { Editor.split(); }
             merge => { Editor.merge(); }
             delete-selected => { Editor.delete-selected(); }

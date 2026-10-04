@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 PuppetCat contributors
+
+import { Theme } from "../theme/theme.slint";
+import { Glyph } from "../icons.slint";
+import { Button, DialogRow, DialogSection, Modal } from "../primitives/modal.slint";
+import { NumberField } from "../primitives/number-field.slint";
+
+// The insert-gap sheet: one number, how much empty time to open at the
+// playhead. Everything after it moves later by that much.
+
+export struct GapData {
+    open: bool,
+    /// seconds of empty time to open
+    seconds: float,
+    /// where it opens, formatted by the caller
+    at: string,
+    /// which lanes make room, in words
+    scope: string,
+}
+
+export component GapDialog inherits Modal {
+    in property <GapData> data;
+
+    callback seconds-changed(value: float);
+    callback apply();
+
+    open: root.data.open;
+    title: "Insert gap";
+    glyph: Glyph.range-cut;
+    surface-width: 380px;
+    note: root.data.at;
+
+    VerticalLayout {
+        DialogSection {
+            first: true;
+            title: "Open empty time";
+
+            DialogRow {
+                label: "Length";
+                NumberField {
+                    value: root.data.seconds;
+                    minimum: 0.1;
+                    maximum: 3600;
+                    step: 0.5;
+                    precision: 2;
+                    suffix: " s";
+                    changed(v) => { root.seconds-changed(v); }
+                }
+            }
+
+            Text {
+                text: root.data.scope;
+                color: Theme.fg-dim;
+                font-size: Theme.fs-sm;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                Button {
+                    block: true;
+                    primary: true;
+                    large: true;
+                    label: "Insert gap";
+                    clicked => { root.apply(); }
+                }
+            }
+        }
+    }
+}

@@ -514,6 +514,9 @@ fn main() -> Result<(), slint::PlatformError> {
     editor.on_tool_changed(on_window!(|state, tool: TimelineTool| {
         state.tool = tool;
     }));
+    editor.on_ripple_changed(on_window!(|state, ripple: bool| {
+        state.ripple.on = ripple;
+    }));
     editor.on_snap_changed(on_window!(|state, snap: bool| {
         state.snap = snap;
     }));
@@ -926,6 +929,15 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_export_closed(on_window!(|state| {
         state.export.open = false;
     }));
+    app.on_gap_closed(on_window!(|state| {
+        state.ripple.gap_open = false;
+    }));
+    app.on_gap_seconds_changed(on_window!(|state, value: f32| {
+        state.ripple.gap_seconds = value;
+    }));
+    app.on_gap_apply(on_window!(|state| {
+        state.apply_gap();
+    }));
     app.on_silence_closed(on_window!(|state| {
         state.close_silence();
     }));
@@ -1114,6 +1126,7 @@ fn main() -> Result<(), slint::PlatformError> {
                         "undo" => state.undo(),
                         "redo" => state.redo(),
                         "snap" => state.snap = !state.snap,
+                        id if state.ripple_option(id) => {}
                         "zoom-in" => {
                             state.seconds_per_pixel = (state.seconds_per_pixel / 1.4).max(0.000_5)
                         }

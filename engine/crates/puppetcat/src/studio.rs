@@ -47,6 +47,8 @@ use crate::prefs::Preferences;
 use crate::ui::*;
 
 mod cleanup;
+mod ripple;
+pub use ripple::RippleState;
 pub use cleanup::{SilenceScope, SilenceState};
 
 /// The monitor's output sizes, matching the picker's rows.
@@ -636,6 +638,7 @@ pub struct Studio {
     // ── the sheets and menus ──
     pub export: ExportState,
     pub silence: SilenceState,
+    pub ripple: RippleState,
     /// The timeline range selection, Shift-dragged on the ruler: seconds
     /// `(start, end)`, what an export of "the selection" covers.
     pub range: Option<(f64, f64)>,
@@ -1029,6 +1032,7 @@ impl Studio {
             preview_failed: false,
             export: ExportState::default(),
             silence: SilenceState::default(),
+            ripple: RippleState::default(),
             range: None,
             settings: SettingsState::default(),
             transcribers: Vec::new(),
@@ -1877,6 +1881,16 @@ impl Studio {
                 effect_id: plan.media.clone(),
                 name: plan.label.clone(),
             })
+        } else if self.ripple.on {
+            let (ripple_policy, link_policy, marker_policy) = self.ripple_policies();
+            self.apply(Command::RippleInsert {
+                media_id: plan.media.clone(),
+                track_id,
+                start: f64::from(plan.start),
+                ripple_policy,
+                link_policy,
+                marker_policy,
+            })
         } else {
             self.apply(Command::AddClip {
                 media_id: plan.media.clone(),
@@ -2365,14 +2379,27 @@ impl Studio {
                     Edge::End => after.duration - f64::from(duration),
                 };
                 if delta.abs() > 1e-6 {
-                    self.apply(Command::TrimClip {
-                        clip_id: clip,
-                        edge: match edge {
-                            Edge::Start => TrimEdge::Start,
-                            Edge::End => TrimEdge::End,
-                        },
-                        delta,
-                    });
+                    let edge = match edge {
+                        Edge::Start => TrimEdge::Start,
+                        Edge::End => TrimEdge::End,
+                    };
+                    if self.ripple.on {
+                        let (ripple_policy, link_policy, marker_policy) = self.ripple_policies();
+                        self.apply(Command::RippleTrim {
+                            clip_id: clip,
+                            edge,
+                            delta,
+                            ripple_policy,
+                            link_policy,
+                            marker_policy,
+                        });
+                    } else {
+                        self.apply(Command::TrimClip {
+                            clip_id: clip,
+                            edge,
+                            delta,
+                        });
+                    }
                 }
             }
             Gesture::None => {
@@ -3241,7 +3268,11 @@ impl Studio {
             .cloned()
             .collect();
         if !doomed.is_empty() {
-            self.apply(Command::RemoveClips { clip_ids: doomed });
+            if self.ripple.on {
+                self.ripple_delete(doomed);
+            } else {
+                self.apply(Command::RemoveClips { clip_ids: doomed });
+            }
         }
         self.selection.clear();
     }
@@ -4303,6 +4334,7 @@ impl Studio {
         editor.set_frame_rate(self.frame_rate());
         editor.set_tool(self.tool);
         editor.set_snap(self.snap);
+        editor.set_ripple(self.ripple.on);
         editor.set_selected_count(self.selection.len() as i32);
         editor.set_has_av_tools(self.has_av_tools());
         editor.set_merge_blocked_because(match self.merge_blocked() {
@@ -4596,6 +4628,7 @@ impl Studio {
 
         app.set_export(self.export_data());
         app.set_silence(self.silence_data());
+        app.set_gap(self.gap_data());
         sync(
             &models.export_sizes,
             (0..4)
@@ -5061,6 +5094,17 @@ impl Studio {
             (session.can_undo(), session.can_redo())
         });
         let has_selection_media = !self.media_selected.is_empty();
+        let check = |id: &str, label: &str, on: bool| MenuItemData {
+            id: id.into(),
+            label: label.into(),
+            kind: MenuRow::Action,
+            glyph: Glyph::None,
+            shortcut: SharedString::new(),
+            enabled: true,
+            danger: false,
+            checkable: true,
+            checked: on,
+        };
 
         match self.open_menu {
             0 => vec![
@@ -5149,6 +5193,26 @@ impl Studio {
                     checkable: true,
                     checked: self.snap,
                 },
+                rule(),
+                check("ripple", "Ripple edit", self.ripple.on),
+                check("ripple-all", "Ripple all lanes", self.ripple.all_lanes),
+                check(
+                    "ripple-linked",
+                    "Linked audio follows",
+                    self.ripple.linked,
+                ),
+                check(
+                    "ripple-markers",
+                    "Free markers follow",
+                    self.ripple.markers,
+                ),
+                row(
+                    "insert-gap",
+                    "Insert gap at playhead…".into(),
+                    Glyph::RangeCut,
+                    "",
+                    !self.timeline().clips.is_empty(),
+                ),
             ],
             2 => vec![
                 row("zoom-in", "Zoom in".into(), Glyph::Plus, "+", true),

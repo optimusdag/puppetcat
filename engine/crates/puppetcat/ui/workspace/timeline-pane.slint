@@ -35,12 +35,14 @@ export component TimelinePane inherits Rectangle {
     // ── the tray ─────────────────────────────────────────────────────────
     in property <TimelineTool> tool: TimelineTool.select;
     in property <bool> snap: true;
+    in property <bool> ripple;
     in property <int> selected-count;
     in property <string> merge-blocked-because;
     in property <bool> has-av-tools;
 
     callback tool-changed(tool: TimelineTool);
     callback snap-changed(snap: bool);
+    callback ripple-changed(ripple: bool);
     callback split();
     callback merge();
     callback delete-selected();
@@ -210,6 +212,7 @@ export component TimelinePane inherits Rectangle {
         TimelineTray {
             tool: root.tool;
             snap: root.snap;
+            ripple: root.ripple;
             selected-count: root.selected-count;
             merge-blocked-because: root.merge-blocked-because;
             has-av-tools: root.has-av-tools;
@@ -218,6 +221,7 @@ export component TimelinePane inherits Rectangle {
 
             tool-changed(tool) => { root.tool-changed(tool); }
             snap-changed(snap) => { root.snap-changed(snap); }
+            ripple-changed(ripple) => { root.ripple-changed(ripple); }
             split => { root.split(); }
             merge => { root.merge(); }
             delete-selected => { root.delete-selected(); }

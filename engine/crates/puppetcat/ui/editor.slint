@@ -185,6 +185,7 @@ export global Editor {
     in-out property <[MarkerData]> markers;
     in-out property <TimelineTool> tool;
     in-out property <bool> snap;
+    in-out property <bool> ripple;
     in-out property <int> selected-count;
     in-out property <string> merge-blocked-because;
     in-out property <bool> has-av-tools;
@@ -204,6 +205,7 @@ export global Editor {
     callback tab-added();
     callback tool-changed(tool: TimelineTool);
     callback snap-changed(snap: bool);
+    callback ripple-changed(ripple: bool);
     callback split();
     callback merge();
     callback delete-selected();

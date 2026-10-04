@@ -79,6 +79,7 @@ pub fn flatten_timeline(project: &Project, timeline_id: Option<&str>) -> Vec<Exp
                     motion_in: None,
                     motion_out: None,
                     media_width: None,
+                    media_duration: None,
                     media_height: None,
                     has_audio: Some(false),
                 });
@@ -149,6 +150,7 @@ pub fn flatten_timeline(project: &Project, timeline_id: Option<&str>) -> Vec<Exp
                 motion_in: None,
                 motion_out: None,
                 media_width: media.width,
+                media_duration: media.duration,
                 media_height: media.height,
                 has_audio: Some(media.has_audio),
             })

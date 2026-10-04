@@ -183,6 +183,10 @@ pub struct ExportClip {
     /// edge the way it always was.
     #[serde(default)]
     pub media_width: Option<u32>,
+    /// The source's length in seconds, when the UI knows it - what says how
+    /// much footage lies past the clip's out-point.
+    #[serde(default)]
+    pub media_duration: Option<f64>,
     /// The source's pixel height; see `media_width`.
     #[serde(default)]
     pub media_height: Option<u32>,
@@ -372,36 +376,43 @@ fn resolve_transitions(clips: &mut [ExportClip], rate: FrameRate, bake_fades: bo
                 // A zoom is a dissolve with a scale on it; a wipe or a push
                 // is all geometry, and shows both pictures at full strength.
                 let dissolves = motion == MotionKind::Zoom;
-                match borrow_handle(clips, cut.outgoing, cut.incoming, cut.duration, frame) {
-                    Handle::Overlap(d) => {
-                        clips[cut.outgoing].motion_out = Some((motion, d));
-                        let b = &mut clips[cut.incoming];
-                        b.motion_in = Some((motion, d));
+                // Both pictures must be on screen at once. They can be when
+                // the incoming clip has footage before its in-point (the
+                // same media, continuous), or when the outgoing clip has
+                // footage after its out-point. With neither, the cut is a
+                // real edit and each clip moves through its own half over
+                // black.
+                let overlap =
+                    match borrow_handle(clips, cut.outgoing, cut.incoming, cut.duration, frame) {
+                        Handle::Overlap(d) => Some(d),
+                        Handle::Short => continue,
+                        Handle::Missing => {
+                            extend_tail(clips, cut.outgoing, cut.incoming, cut.duration, frame)
+                        }
+                    };
+                if let Some(d) = overlap {
+                    clips[cut.outgoing].motion_out = Some((motion, d));
+                    let b = &mut clips[cut.incoming];
+                    b.motion_in = Some((motion, d));
+                    if dissolves {
+                        b.video_fade_in = d;
+                    }
+                } else {
+                    let Some(half) = dip_half(clips, &cut, frame) else {
+                        continue;
+                    };
+                    {
+                        let a = &mut clips[cut.outgoing];
+                        a.motion_out = Some((motion, half.min(a.duration)));
                         if dissolves {
-                            b.video_fade_in = d;
+                            a.video_fade_out = half.min(a.duration);
                         }
                     }
-                    Handle::Short => {}
-                    Handle::Missing => {
-                        // The same dip as the cross-fade's: each clip moves
-                        // through its own half, over black, because there is
-                        // no footage to hold both pictures at once.
-                        let Some(half) = dip_half(clips, &cut, frame) else {
-                            continue;
-                        };
-                        {
-                            let a = &mut clips[cut.outgoing];
-                            a.motion_out = Some((motion, half.min(a.duration)));
-                            if dissolves {
-                                a.video_fade_out = half.min(a.duration);
-                            }
-                        }
-                        {
-                            let b = &mut clips[cut.incoming];
-                            b.motion_in = Some((motion, half.min(b.duration)));
-                            if dissolves {
-                                b.video_fade_in = half.min(b.duration);
-                            }
+                    {
+                        let b = &mut clips[cut.incoming];
+                        b.motion_in = Some((motion, half.min(b.duration)));
+                        if dissolves {
+                            b.video_fade_in = half.min(b.duration);
                         }
                     }
                 }
@@ -509,8 +520,48 @@ fn borrow_handle(
     // Sound rides the picture: the pre-roll fades in rather than arriving at
     // full level a transition early.
     b.fade_in = b.fade_in.max(d);
-    b.track = a_track + 1;
+    // The lane above the outgoing clip's own: odd lanes are the ones the
+    // doubling left free, and a chain of transitions must not climb into
+    // the next original lane's.
+    b.track = (a_track & !1) + 1;
     Handle::Overlap(d)
+}
+
+/// Lets the outgoing clip run on past its out-point under the head of the
+/// incoming one, so a transition between two different clips shows both
+/// pictures instead of dipping through black. It needs footage after the
+/// out-point (the clip was trimmed short of its source) or is a still, and a
+/// clip that plays forward at a constant speed. The incoming clip moves to the
+/// lane above, keeping its own timing; the outgoing one's sound fades out
+/// across the overlap. Returns the overlap's length, or `None` when the
+/// outgoing clip has nothing past its end to show.
+fn extend_tail(
+    clips: &mut [ExportClip],
+    outgoing: usize,
+    incoming: usize,
+    duration: f64,
+    frame: f64,
+) -> Option<f64> {
+    let b_duration = clips[incoming].duration;
+    let a = &mut clips[outgoing];
+    if a.reverse || !a.speed_curve.is_empty() {
+        return None;
+    }
+    let available = if a.kind == ClipKind::Image {
+        f64::INFINITY
+    } else {
+        let source_end = a.source_start + a.duration * a.speed;
+        (a.media_duration? - source_end) / a.speed.max(0.0625)
+    };
+    let d = duration.min(b_duration).min(available);
+    if d < frame {
+        return None;
+    }
+    a.duration += d;
+    a.fade_out = a.fade_out.max(d);
+    let lane = a.track & !1;
+    clips[incoming].track = lane + 1;
+    Some(d)
 }
 
 /// Half the span each clip gets when a transition dips instead of
@@ -1900,6 +1951,7 @@ mod tests {
             motion_in: None,
             motion_out: None,
             media_width: None,
+            media_duration: None,
             media_height: None,
             has_audio: None,
         }
@@ -2024,6 +2076,117 @@ mod tests {
         let _ = std::fs::remove_file(&black_path);
         let _ = std::fs::remove_file(&source_path);
         let _ = std::fs::remove_file(&written);
+    }
+
+    /// End to end against a real FFmpeg: a motion transition between two
+    /// *different* files shows both pictures, not a dip through black. The
+    /// first clip is the head of a longer red file, so it has footage to run
+    /// on under the blue clip. Skips silently without FFmpeg.
+    #[test]
+    fn a_motion_transition_between_different_clips_never_goes_through_black() {
+        use puppetcat_core::frame::Frame;
+        use puppetcat_media::{DecodeOptions, Decoder, EncodeOptions, Encoder, FrameSink};
+        use std::sync::atomic::AtomicBool;
+
+        let dir = std::env::temp_dir();
+        let make = |name: &str, colour: [u8; 4]| -> Option<String> {
+            let path = dir.join(name);
+            let mut enc =
+                Encoder::create(&path, 64, 64, FrameRate::THIRTY, &EncodeOptions::default())
+                    .ok()?;
+            for _ in 0..90 {
+                let mut frame = Frame::black(64, 64);
+                frame.fill(colour);
+                enc.write_frame(&frame).ok()?;
+            }
+            enc.finish().ok()?;
+            Some(path.to_string_lossy().into_owned())
+        };
+        let Some(red) = make("puppetcat-motion-red.mp4", [255, 0, 0, 255]) else {
+            return; // no ffmpeg here
+        };
+        let blue = make("puppetcat-motion-blue.mp4", [0, 0, 255, 255]).expect("same encoder");
+        let is_red = |p: [u8; 4]| p[0] > 150 && p[2] < 110;
+        let is_blue = |p: [u8; 4]| p[2] > 150 && p[0] < 110;
+
+        for kind in ["push", "wipe-left", "wipe-right", "zoom"] {
+            let mut a = clip("video", 0, 0.0, 1.0, 0.0);
+            a.path = red.clone();
+            a.media_width = Some(64);
+            a.media_height = Some(64);
+            a.media_duration = Some(3.0);
+            let mut b = clip("video", 0, 1.0, 1.0, 0.0);
+            b.path = blue.clone();
+            b.media_width = Some(64);
+            b.media_height = Some(64);
+            b.media_duration = Some(3.0);
+            b.transition = spec(kind, 1.0);
+
+            let out = dir.join(format!("puppetcat-motion-{kind}.mp4"));
+            let request = ExportRequest {
+                output: out.to_string_lossy().into_owned(),
+                scratch_dir: None,
+                width: 64,
+                height: 64,
+                rate_num: 30,
+                rate_den: 1,
+                crf: 18,
+                preset: "medium".to_owned(),
+                clips: vec![a, b],
+                range: None,
+            };
+            let cancel = AtomicBool::new(false);
+            let mut progress = |_: i64, _: i64, _: &'static str| {};
+            let written = render(
+                &request,
+                Reporter {
+                    progress: &mut progress,
+                    cancel: &cancel,
+                },
+            )
+            .expect("renders");
+
+            let mut decoder = Decoder::open(&written, &DecodeOptions::default()).expect("decodes");
+            let mut frames = Vec::new();
+            while let Some(frame) = decoder.next_frame().expect("decodes a frame") {
+                frames.push(frame);
+            }
+            // Through the whole transition (1.0 s to 2.0 s) the left and
+            // right edges are always some picture, never the black ground.
+            for (index, frame) in frames.iter().enumerate().skip(31).take(26) {
+                for x in [3, 60] {
+                    let pixel = frame.pixel(x, 32).expect("in range");
+                    assert!(
+                        pixel[0] > 40 || pixel[1] > 40 || pixel[2] > 40,
+                        "{kind}: black at column {x}, frame {index}: {pixel:?}"
+                    );
+                }
+            }
+            // Halfway through, a push and the wipes split the frame between the
+            // two pictures.
+            let mid = frames[45].clone();
+            let left = mid.pixel(8, 32).expect("in range");
+            let right = mid.pixel(56, 32).expect("in range");
+            match kind {
+                "push" | "wipe-left" => {
+                    assert!(is_red(left) && is_blue(right), "{kind}: {left:?} {right:?}")
+                }
+                "wipe-right" => {
+                    assert!(is_blue(left) && is_red(right), "{kind}: {left:?} {right:?}")
+                }
+                _ => {}
+            }
+            // And it ends on the incoming picture.
+            let last = frames
+                .last()
+                .expect("frames")
+                .pixel(32, 32)
+                .expect("in range");
+            assert!(is_blue(last), "{kind}: ends on {last:?}");
+            let _ = std::fs::remove_file(&written);
+        }
+        let _ = std::fs::remove_file(&red);
+        let _ = std::fs::remove_file(&blue);
     }
 
     /// A `scratch_dir` that names a folder other than the output's own must
@@ -2810,6 +2973,73 @@ mod tests {
         assert_eq!(clips[1].start, 2.0, "the cut is not moved");
         assert_eq!(clips[0].motion_out, Some((MotionKind::Push, 0.5)));
         assert_eq!(clips[1].motion_in, Some((MotionKind::Push, 0.5)));
+    }
+
+    #[test]
+    fn a_motion_between_different_clips_runs_the_outgoing_clip_on_under_the_incoming() {
+        // Two different files; the first was trimmed to 2 s of a 10 s file,
+        // so it has footage after its out-point to show during the push.
+        let mut clips = vec![
+            clip("video", 0, 0.0, 2.0, 0.0),
+            clip("video", 0, 2.0, 2.0, 0.0),
+        ];
+        clips[0].media_duration = Some(10.0);
+        clips[1].path = "other.mp4".to_owned();
+        clips[1].transition = spec("push", 1.0);
+        resolve_transitions(&mut clips, FrameRate::THIRTY, false);
+        assert_eq!(
+            clips[0].duration, 3.0,
+            "runs on a second under the next clip"
+        );
+        assert_eq!(clips[1].start, 2.0, "the incoming clip keeps its timing");
+        assert_eq!(clips[1].track, 1, "and sits on the lane above");
+        assert_eq!(clips[0].motion_out, Some((MotionKind::Push, 1.0)));
+        assert_eq!(clips[1].motion_in, Some((MotionKind::Push, 1.0)));
+        assert_eq!(clips[0].video_fade_out, 0.0, "no dip through black");
+    }
+
+    #[test]
+    fn a_motion_still_dips_when_the_outgoing_clip_has_no_footage_left() {
+        let mut clips = vec![
+            clip("video", 0, 0.0, 2.0, 0.0),
+            clip("video", 0, 2.0, 2.0, 0.0),
+        ];
+        clips[0].media_duration = Some(2.0); // used right to its end
+        clips[1].path = "other.mp4".to_owned();
+        clips[1].transition = spec("wipe-left", 1.0);
+        resolve_transitions(&mut clips, FrameRate::THIRTY, false);
+        assert_eq!(clips[0].duration, 2.0);
+        assert_eq!(clips[0].motion_out, Some((MotionKind::WipeLeft, 0.5)));
+        assert_eq!(clips[1].motion_in, Some((MotionKind::WipeLeft, 0.5)));
+    }
+
+    #[test]
+    fn a_motion_after_a_still_always_has_footage_to_run_on() {
+        let mut clips = vec![
+            clip("image", 0, 0.0, 2.0, 0.0),
+            clip("video", 0, 2.0, 2.0, 0.0),
+        ];
+        clips[1].transition = spec("zoom", 1.0);
+        resolve_transitions(&mut clips, FrameRate::THIRTY, false);
+        assert_eq!(clips[0].duration, 3.0);
+        assert_eq!(clips[1].video_fade_in, 1.0, "a zoom also dissolves");
+    }
+
+    #[test]
+    fn a_chain_of_transitions_never_climbs_into_the_next_original_lane() {
+        let mut clips = vec![
+            clip("video", 0, 0.0, 2.0, 0.0),
+            clip("video", 0, 2.0, 2.0, 2.0),
+            clip("video", 0, 4.0, 2.0, 4.0),
+        ];
+        clips[1].transition = spec("push", 1.0);
+        clips[2].transition = spec("push", 1.0);
+        resolve_transitions(&mut clips, FrameRate::THIRTY, false);
+        assert!(
+            clips.iter().all(|c| c.track <= 1),
+            "{:?}",
+            clips.iter().map(|c| c.track).collect::<Vec<_>>()
+        );
     }
 
     #[test]

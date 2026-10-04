@@ -134,6 +134,7 @@ impl Titles {
                     motion_out: None,
                     media_width: Some(width),
                     media_height: Some(height),
+                    media_duration: None,
                     has_audio: Some(false),
                 },
                 block,

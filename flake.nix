@@ -109,6 +109,11 @@
 
           cargoRoot = "engine";
           buildAndTestSubdir = "engine";
+
+          # cargo-auditable re-runs `cargo metadata` with the build's
+          # `--features wgpu` but without `-p puppetcat`, and in this workspace
+          # that fails ("puppetcat-render does not have feature `wgpu`").
+          auditable = false;
           cargoLock.lockFile = ./engine/Cargo.lock;
           cargoBuildFlags = [
             "-p"

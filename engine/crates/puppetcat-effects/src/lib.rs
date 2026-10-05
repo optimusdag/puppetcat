@@ -145,7 +145,10 @@ mod tests {
         for package in catalogue.packages() {
             assert!(package.id().starts_with("puppetcat."), "{}", package.id());
         }
-        assert_eq!(catalogue.get("glow").map(Package::id), Some("puppetcat.glow"));
+        assert_eq!(
+            catalogue.get("glow").map(Package::id),
+            Some("puppetcat.glow")
+        );
         assert_eq!(
             catalogue.get("puppetcat.glow").map(Package::id),
             Some("puppetcat.glow")

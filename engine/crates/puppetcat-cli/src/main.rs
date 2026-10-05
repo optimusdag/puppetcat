@@ -17,7 +17,11 @@ use puppetcat_media::{EncodeOptions, Encoder, FrameSink, ReaderPool};
 use puppetcat_render::{Compositor, CpuCompositor, Layer, WgpuCompositor, plan_frame};
 
 #[derive(Parser)]
-#[command(name = "puppetcat-cli", version, about = "PuppetCat engine command line")]
+#[command(
+    name = "puppetcat-cli",
+    version,
+    about = "PuppetCat engine command line"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

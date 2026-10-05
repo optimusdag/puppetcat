@@ -357,7 +357,10 @@ mod tests {
     #[test]
     fn bad_manifests_are_rejected_with_a_reason() {
         rejects(&GOOD.replace("puppetcat.blur", "blur"), "author.name");
-        rejects(&GOOD.replace("puppetcat.blur", "PuppetCat.Blur"), "author.name");
+        rejects(
+            &GOOD.replace("puppetcat.blur", "PuppetCat.Blur"),
+            "author.name",
+        );
         rejects(
             &GOOD.replace("intensity = \"radius\"", "intensity = \"sigma\""),
             "intensity",

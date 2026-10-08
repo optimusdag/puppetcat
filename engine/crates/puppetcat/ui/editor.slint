@@ -268,5 +268,6 @@ export global Editor {
     callback track-flag-changed(index: int, visible: bool, muted: bool, locked: bool);
     callback track-sized(index: int, size: TrackSize);
     callback track-removed(index: int);
+    callback track-moved(from: int, to: int);
     callback track-renamed(index: int, name: string);
 }

@@ -127,6 +127,7 @@ export component TimelinePane inherits Rectangle {
     callback track-flag-changed(index: int, visible: bool, muted: bool, locked: bool);
     callback track-sized(index: int, size: TrackSize);
     callback track-removed(index: int);
+    callback track-moved(from: int, to: int);
     callback track-renamed(index: int, name: string);
 
     /// The corner button: show something else in this pane's seat.
@@ -289,6 +290,7 @@ export component TimelinePane inherits Rectangle {
                 }
                 sized(index, size) => { root.track-sized(index, size); }
                 removed(index) => { root.track-removed(index); }
+                moved(from, to) => { root.track-moved(from, to); }
                 renamed(index, name) => { root.track-renamed(index, name); }
             }
 

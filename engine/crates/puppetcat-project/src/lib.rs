@@ -1400,6 +1400,55 @@ mod tests {
     }
 
     #[test]
+    fn move_track_reorders_clamps_and_undoes() {
+        let (mut editor, _, _) = fixture();
+        editor
+            .stage(vec![Command::AddTrack, Command::AddTrack])
+            .expect("adds lanes");
+        let ids = |editor: &Editor| -> Vec<String> {
+            editor
+                .project()
+                .active()
+                .tracks
+                .iter()
+                .map(|track| track.id.clone())
+                .collect()
+        };
+        let before = ids(&editor);
+        assert!(before.len() >= 3);
+        let first = before[0].clone();
+
+        // Past the end clamps to the last slot.
+        let outcome = editor
+            .apply(Command::MoveTrack {
+                track_id: first.clone(),
+                index: 99,
+            })
+            .expect("moves");
+        assert!(outcome.applied);
+        let after = ids(&editor);
+        assert_eq!(after.last(), Some(&first));
+        assert_eq!(after.len(), before.len());
+
+        // Already there, and unknown ids, are tolerated no-ops.
+        for command in [
+            Command::MoveTrack {
+                track_id: first,
+                index: 99,
+            },
+            Command::MoveTrack {
+                track_id: "nope".to_owned(),
+                index: 0,
+            },
+        ] {
+            assert!(!editor.apply(command).expect("tolerated").applied);
+        }
+
+        editor.undo();
+        assert_eq!(ids(&editor), before);
+    }
+
+    #[test]
     fn renames_trim_whitespace_and_refuse_to_blank_a_name() {
         let (mut editor, _, _) = fixture();
         let track_id = editor.project().active().tracks[0].id.clone();
@@ -1710,6 +1759,10 @@ mod tests {
             Command::AddTrack,
             Command::RemoveTrack {
                 track_id: "T1".to_owned(),
+            },
+            Command::MoveTrack {
+                track_id: "T1".to_owned(),
+                index: 0,
             },
             Command::RenameTrack {
                 track_id: "T1".to_owned(),

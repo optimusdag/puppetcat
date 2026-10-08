@@ -448,6 +448,17 @@ pub struct SetTrackFlagParams {
     pub value: bool,
 }
 
+/// Parameters for `move_track`.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveTrackParams {
+    /// The lane to move.
+    pub track_id: String,
+    /// Its new position in the track list, where 0 is the first track listed
+    /// (the bottom lane in the window). Clamped to the last position.
+    pub index: usize,
+}
+
 /// Parameters for `add_marker`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1562,6 +1573,19 @@ impl PuppetCatAgentServer {
     )]
     fn add_track(&self) -> Result<CallToolResult, McpError> {
         ok_state(self.engine.apply(Command::AddTrack))
+    }
+
+    #[tool(
+        description = "Reorder lanes: move a track to a new position in the track list. Clips move with their lane."
+    )]
+    fn move_track(
+        &self,
+        Parameters(params): Parameters<MoveTrackParams>,
+    ) -> Result<CallToolResult, McpError> {
+        ok_state(self.engine.apply(Command::MoveTrack {
+            track_id: params.track_id,
+            index: params.index,
+        }))
     }
 
     #[tool(description = "Flip a track's visibility or mute toggle.")]

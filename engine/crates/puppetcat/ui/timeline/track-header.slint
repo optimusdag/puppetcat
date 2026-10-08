@@ -129,6 +129,20 @@ component Header inherits Rectangle {
     callback sized(size: TrackSize);
     callback removed();
     callback renamed(name: string);
+    /// The grip was taken hold of, moved and let go. `grab-moved` carries the
+    /// pointer's travel since the press.
+    callback grab-started();
+    callback grab-moved(delta: length);
+    callback grab-ended();
+    in property <bool> grabbed;
+    /// The dragged lane's centre is over this row.
+    in property <bool> under;
+    callback entered();
+    changed under => {
+        if (root.under) {
+            root.entered();
+        }
+    }
 
     property <bool> renaming;
     /// Neither seen nor heard: the name goes dim, so a lane that contributes
@@ -149,6 +163,40 @@ component Header inherits Rectangle {
             padding-right: 4px;
             padding-top: 6px;
             spacing: 1px;
+
+            VerticalLayout {
+                alignment: start;
+                width: 14px;
+                Rectangle {
+                    height: 20px;
+                    Icon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        glyph: Glyph.grip;
+                        size: 14px;
+                        tint: grip.has-hover || root.grabbed ? Theme.fg : Theme.fg-dim;
+                    }
+                    grip := TouchArea {
+                        mouse-cursor: root.grabbed ? MouseCursor.grabbing : MouseCursor.grab;
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.left) {
+                                if (event.kind == PointerEventKind.down) {
+                                    root.grab-started();
+                                } else if (event.kind == PointerEventKind.up
+                                    || event.kind == PointerEventKind.cancel) {
+                                    root.grab-ended();
+                                }
+                            }
+                        }
+                        moved => {
+                            if (self.pressed) {
+                                root.grab-moved(self.mouse-y - self.pressed-y);
+                            }
+                        }
+                    }
+                }
+            }
+
             // No `alignment: start` here. A start-aligned row gives every
             // child its preferred width and stops stretching altogether — and
             // the name column's preferred width is nothing, so the label
@@ -317,12 +365,57 @@ export component TrackHeaders inherits Rectangle {
     callback sized(index: int, size: TrackSize);
     callback removed(index: int);
     callback renamed(index: int, name: string);
+    /// A lane was dragged by its grip and dropped on another's place. Both are
+    /// header indices, top lane first.
+    callback moved(from: int, to: int);
 
     clip: true;
+
+    /// The lane being dragged, or -1, and how far the pointer has taken it.
+    property <int> dragging: -1;
+    property <length> drag-dy;
+    /// Where it would land: the lane under the dragged row's centre, or the
+    /// nearest end of the stack. Each row reports when it comes to be under
+    /// that point, since an expression cannot walk the rows itself.
+    property <int> target: -1;
+    property <length> centre: root.dragging >= 0 && root.dragging < root.tracks.length
+        ? root.tracks[root.dragging].top + root.tracks[root.dragging].height / 2
+            + root.drag-dy
+        : 0px;
 
     for track[index] in root.tracks: Header {
         x: 0;
         y: root.ruler-height + track.top - root.track-scroll;
+        // The row stays where it is, dimmed, and a ghost carries the drag: a
+        // lifted row would paint under the ones declared after it, and `z`
+        // takes a literal.
+        opacity: root.dragging == index ? 0.4 : 1.0;
+        under: root.dragging >= 0
+            && (index == 0 || root.centre >= track.top)
+            && (index == root.tracks.length - 1 || root.centre < track.top + track.height);
+        entered => { root.target = index; }
+        grabbed: root.dragging == index;
+        grab-started => {
+            root.drag-dy = 0px;
+            root.target = index;
+            root.dragging = index;
+        }
+        grab-moved(delta) => {
+            if (root.dragging == index) {
+                root.drag-dy = delta;
+            }
+        }
+        grab-ended => {
+            if (root.dragging == index) {
+                let to = root.target;
+                root.dragging = -1;
+                root.drag-dy = 0px;
+                if (to >= 0 && to != index) {
+                    root.moved(index, to);
+                }
+            }
+        }
+
         width: parent.width;
         height: track.height;
         // Clipped to the stack rather than allowed to ride over the ruler,
@@ -338,6 +431,41 @@ export component TrackHeaders inherits Rectangle {
         sized(size) => { root.sized(index, size); }
         removed => { root.removed(index); }
         renamed(name) => { root.renamed(index, name); }
+    }
+
+    // The dragged lane, following the pointer.
+    if root.dragging >= 0 && root.dragging < root.tracks.length: Rectangle {
+        x: 0;
+        y: root.ruler-height + root.tracks[root.dragging].top - root.track-scroll
+            + root.drag-dy;
+        width: parent.width;
+        height: root.tracks[root.dragging].height;
+        background: Theme.raised;
+        border-width: 1px;
+        border-color: Theme.accent;
+        opacity: 0.9;
+
+        Text {
+            x: 30px;
+            width: parent.width - 38px;
+            height: 26px;
+            text: root.tracks[root.dragging].name;
+            color: Theme.fg;
+            font-size: Theme.fs;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    // Where the dragged lane will land: a line on the edge it will sit
+    // against, below the target when moving down and above it when moving up.
+    if root.target >= 0 && root.target != root.dragging: Rectangle {
+        x: 0;
+        y: root.ruler-height + root.tracks[root.target].top - root.track-scroll
+            + (root.target > root.dragging ? root.tracks[root.target].height : 0px) - 1px;
+        width: parent.width;
+        height: 2px;
+        background: Theme.accent;
     }
 
     // The bar, over the rows and under the corner. On the trailing edge,

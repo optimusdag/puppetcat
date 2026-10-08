@@ -455,6 +455,16 @@ pub enum Command {
         /// The lane to delete.
         track_id: String,
     },
+    /// Moves a lane to `index` in the stack, where 0 is the bottom lane
+    /// (the first in `tracks`, painted underneath the rest). Out-of-range
+    /// indices clamp to the top; an unknown id or a move to where the lane
+    /// already is applies nothing. Clips ride with their lane.
+    MoveTrack {
+        /// The lane to move.
+        track_id: String,
+        /// Where it should end up in `tracks`.
+        index: usize,
+    },
     /// Renames a lane. Whitespace-only names are ignored so a track can
     /// never end up blank; unknown ids are tolerated.
     RenameTrack {
@@ -1973,6 +1983,27 @@ fn apply_command(
             Ok(Outcome {
                 created_id: None,
                 applied,
+            })
+        }
+
+        Command::MoveTrack { track_id, index } => {
+            let timeline = project.active_mut();
+            let Some(from) = timeline
+                .tracks
+                .iter()
+                .position(|track| track.id == track_id)
+            else {
+                return Ok(Outcome::default());
+            };
+            let to = index.min(timeline.tracks.len() - 1);
+            if from == to {
+                return Ok(Outcome::default());
+            }
+            let track = timeline.tracks.remove(from);
+            timeline.tracks.insert(to, track);
+            Ok(Outcome {
+                created_id: None,
+                applied: true,
             })
         }
 

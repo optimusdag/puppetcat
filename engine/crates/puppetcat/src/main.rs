@@ -698,6 +698,10 @@ fn main() -> Result<(), slint::PlatformError> {
     editor.on_track_sized(on_window!(|state, row: i32, size: TrackSize| {
         state.set_lane_size(row, size);
     }));
+    // Rows count from the top lane; `tracks` is stored bottom lane first.
+    editor.on_track_moved(on_window!(|state, from: i32, to: i32| {
+        state.move_track(from, to);
+    }));
     editor.on_track_removed(on_window!(|state, row: i32| {
         let Some(id) = state.row_track(row).map(|track| track.id.clone()) else {
             return;

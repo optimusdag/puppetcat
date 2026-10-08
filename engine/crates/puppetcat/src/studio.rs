@@ -5465,6 +5465,21 @@ impl Studio {
 
     /// The clip's track flags, as one command per flag that changed, plus
     /// the lock, which is the window's.
+    /// Drags a lane from one row to another. Rows count from the top lane.
+    pub fn move_track(&mut self, from_row: i32, to_row: i32) {
+        let count = self.timeline().tracks.len() as i32;
+        if from_row == to_row || to_row < 0 || to_row >= count {
+            return;
+        }
+        let Some(id) = self.row_track(from_row).map(|track| track.id.clone()) else {
+            return;
+        };
+        self.apply(Command::MoveTrack {
+            track_id: id,
+            index: (count - 1 - to_row) as usize,
+        });
+    }
+
     pub fn track_flags(&mut self, row: i32, visible: bool, muted: bool, locked: bool) {
         let Some(track) = self.row_track(row).cloned() else {
             return;

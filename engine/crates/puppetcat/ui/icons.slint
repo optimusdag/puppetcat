@@ -102,6 +102,7 @@ export enum Glyph {
     range-cut,
     silence,
     ripple,
+    grip,
     // the start screen
     info,
     folder,
@@ -479,6 +480,14 @@ export component Icon inherits Rectangle {
     if root.glyph == Glyph.ripple: Stroked {
         size: root.size; tint: root.tint; weight: root.weight;
         commands: "M18 8l4 4-4 4 M2 12h20 M6 8l-4 4 4 4";
+    }
+
+    // lucide/grip-vertical: a handle to take hold of.
+    if root.glyph == Glyph.grip: Stroked {
+        size: root.size; tint: root.tint; weight: root.weight;
+        commands: "M8.5 5a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0 M8.5 12a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0"
+            + " M8.5 19a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0 M14.5 5a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0"
+            + " M14.5 12a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0 M14.5 19a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0";
     }
 
     // lucide/type

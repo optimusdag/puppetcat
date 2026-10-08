@@ -230,7 +230,10 @@ export component IconButton inherits Rectangle {
             root.ring = false;
         }
         key-pressed(event) => {
-            if (event.text == " " || event.text == "\n") {
+            // Space only while the ring is up, i.e. the button was reached by
+            // Tab. A button that was merely clicked keeps focus, and letting
+            // it eat Space would shadow the window's play/pause key.
+            if (event.text == "\n" || (event.text == " " && root.ring)) {
                 root.clicked();
                 return EventResult.accept;
             }

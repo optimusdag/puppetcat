@@ -76,7 +76,7 @@ export component Select inherits Rectangle {
         }
         key-pressed(event) => {
             if (event.text == Key.DownArrow || event.text == Key.UpArrow
-                || event.text == "\n" || event.text == " ") {
+                || event.text == "\n" || (event.text == " " && root.ring)) {
                 root.reveal();
                 return EventResult.accept;
             }

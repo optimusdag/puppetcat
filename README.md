@@ -90,8 +90,10 @@ PuppetCat treats agentic editing as a first-class use, not an afterthought.
 
 ### Connect an agent
 
-The MCP server speaks stdio. Build it from source (see
-[`engine/README.md`](./engine/README.md)) and point your agent at the binary,
+The MCP server speaks stdio. The macOS app bundle ships it at
+`PuppetCat.app/Contents/MacOS/puppetcat-agent-mcp`, so installing a new
+PuppetCat updates it too. Elsewhere, build it from source (see
+[`engine/README.md`](./engine/README.md)). Point your agent at the binary,
 for example in an MCP client config:
 
 ```json

@@ -44,16 +44,27 @@ FFMPEG_DIR=$(brew --prefix ffmpeg)
 echo "Building (profile: app)..."
 (cd engine && cargo build --profile app -p puppetcat)
 
+# The MCP server ships beside the window: the stand-alone server forwards to
+# the window, so the two must come from one build. It uses the release
+# profile, not app: app aborts on panic, and the server relies on unwinding
+# to turn a panicking tool call into an error instead of dying.
+echo "Building the MCP server (profile: release)..."
+(cd engine && cargo build --release -p puppetcat-agent --bin puppetcat-agent-mcp)
+
 binary="engine/target/app/puppetcat"
-if [ ! -f "$binary" ]; then
-  echo "package-macos.sh: expected $binary after the build" >&2
-  exit 1
-fi
+mcp_binary="engine/target/release/puppetcat-agent-mcp"
+for built in "$binary" "$mcp_binary"; do
+  if [ ! -f "$built" ]; then
+    echo "package-macos.sh: expected $built after the build" >&2
+    exit 1
+  fi
+done
 
 app="PuppetCat.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp "$binary" "$app/Contents/MacOS/puppetcat"
+cp "$mcp_binary" "$app/Contents/MacOS/puppetcat-agent-mcp"
 
 # The icon set Apple wants: each size and its @2x twin.
 iconset=$(mktemp -d)/PuppetCat.iconset
@@ -97,13 +108,16 @@ PLIST
 echo "Bundling dylibs..."
 dylibbundler -od -b \
   -x "$app/Contents/MacOS/puppetcat" \
+  -x "$app/Contents/MacOS/puppetcat-agent-mcp" \
   -d "$app/Contents/Frameworks" \
   -p @executable_path/../Frameworks
 
-if otool -L "$app/Contents/MacOS/puppetcat" | grep -E '/opt/homebrew|/usr/local'; then
-  echo "package-macos.sh: the binary still loads libraries from outside the bundle" >&2
-  exit 1
-fi
+for bundled in puppetcat puppetcat-agent-mcp; do
+  if otool -L "$app/Contents/MacOS/$bundled" | grep -E '/opt/homebrew|/usr/local'; then
+    echo "package-macos.sh: $bundled still loads libraries from outside the bundle" >&2
+    exit 1
+  fi
+done
 
 identity=$(security find-identity -v -p codesigning 2>/dev/null \
   | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -1)
@@ -111,6 +125,7 @@ if [ -n "$identity" ]; then
   echo "Signing with $identity"
   find "$app/Contents/Frameworks" -name '*.dylib' -exec \
     codesign --force --options runtime --timestamp -s "$identity" {} \;
+  codesign --force --options runtime --timestamp -s "$identity" "$app/Contents/MacOS/puppetcat-agent-mcp"
   codesign --force --options runtime --timestamp -s "$identity" "$app/Contents/MacOS/puppetcat"
   codesign --force --options runtime --timestamp -s "$identity" "$app"
   codesign --verify --deep --strict "$app"
@@ -125,3 +140,4 @@ hdiutil create -volname PuppetCat -srcfolder "$app" -ov -format UDZO "$dmg"
 
 echo
 echo "Built $app and $dmg"
+echo "MCP server: $PWD/$app/Contents/MacOS/puppetcat-agent-mcp"

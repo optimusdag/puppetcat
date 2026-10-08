@@ -304,6 +304,12 @@ jobs:
         run: |
           set -o pipefail
           cargo build --profile app -p puppetcat --target ${{ matrix.target }} 2>&1 | tee build.log
+          # The MCP server ships beside the macOS window (it forwards calls
+          # to it, so both must come from one build). Release, not app: app
+          # aborts on panic and the server relies on unwinding.
+          if [ "${{ matrix.platform }}" = macos ]; then
+            cargo build --release -p puppetcat-agent --bin puppetcat-agent-mcp --target ${{ matrix.target }} 2>&1 | tee -a build.log
+          fi
 
       - name: Build log to the summary (failure only)
         if: failure()
@@ -333,6 +339,7 @@ jobs:
           rm -rf "$app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
           cp "engine/target/${{ matrix.target }}/app/puppetcat" "$app/Contents/MacOS/puppetcat"
+          cp "engine/target/${{ matrix.target }}/release/puppetcat-agent-mcp" "$app/Contents/MacOS/puppetcat-agent-mcp"
 
           # The icon set Apple wants: each size and its @2x twin.
           iconset=PuppetCat.iconset
@@ -375,15 +382,18 @@ jobs:
           # in and re-pointed at @executable_path/../Frameworks.
           dylibbundler -od -b \
             -x "$app/Contents/MacOS/puppetcat" \
+            -x "$app/Contents/MacOS/puppetcat-agent-mcp" \
             -d "$app/Contents/Frameworks" \
             -p @executable_path/../Frameworks
 
           # Nothing outside the bundle may remain: a load path into
           # Homebrew would break on a Mac without it.
-          if otool -L "$app/Contents/MacOS/puppetcat" | grep -E '/opt/homebrew|/usr/local' ; then
-            echo "the binary still loads libraries from outside the bundle" >&2
-            exit 1
-          fi
+          for bundled in puppetcat puppetcat-agent-mcp; do
+            if otool -L "$app/Contents/MacOS/$bundled" | grep -E '/opt/homebrew|/usr/local' ; then
+              echo "$bundled still loads libraries from outside the bundle" >&2
+              exit 1
+            fi
+          done
 
       # Signed with the repository's Developer ID when it has one, and
       # notarised so Gatekeeper opens it without a warning; ad-hoc signed
@@ -416,6 +426,7 @@ jobs:
             # signature covers what is beneath it.
             find "$app/Contents/Frameworks" -name '*.dylib' -exec \
               codesign --force --options runtime --timestamp -s "$IDENTITY" {} \;
+            codesign --force --options runtime --timestamp -s "$IDENTITY" "$app/Contents/MacOS/puppetcat-agent-mcp"
             codesign --force --options runtime --timestamp -s "$IDENTITY" "$app/Contents/MacOS/puppetcat"
             codesign --force --options runtime --timestamp -s "$IDENTITY" "$app"
             codesign --verify --deep --strict "$app"

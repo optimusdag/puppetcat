@@ -22,6 +22,8 @@ use serde::Serialize;
 
 /// Most frames one contact sheet may hold.
 pub const MAX_CONTACT_SHEET_FRAMES: usize = 64;
+/// Longest side of a contact sheet whose cell size was not given.
+const MAX_DEFAULT_SHEET_EDGE: u32 = 4096;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -155,12 +157,23 @@ pub fn render_contact_sheet(
     }
 
     let settings = session.settings();
-    let frame_width = width.unwrap_or(settings.width).max(1);
-    let frame_height = height.unwrap_or(settings.height).max(1);
     let columns = columns
         .unwrap_or_else(|| (times.len() as f64).sqrt().ceil() as u32)
         .clamp(1, times.len() as u32);
     let rows = (times.len() as u32).div_ceil(columns);
+    // Unsized cells default to the timeline size, shrunk so the whole sheet
+    // stays within MAX_DEFAULT_SHEET_EDGE; a full-size grid of 24 frames is
+    // ~200 MB of pixels before PNG and base64 encoding.
+    let fit = (f64::from(MAX_DEFAULT_SHEET_EDGE) / f64::from(settings.width * columns))
+        .min(f64::from(MAX_DEFAULT_SHEET_EDGE) / f64::from(settings.height * rows))
+        .min(1.0);
+    let scaled = |size: u32| ((f64::from(size) * fit).round() as u32).max(1);
+    let (default_width, default_height) = match (width, height) {
+        (None, None) => (scaled(settings.width), scaled(settings.height)),
+        _ => (settings.width, settings.height),
+    };
+    let frame_width = width.unwrap_or(default_width).max(1);
+    let frame_height = height.unwrap_or(default_height).max(1);
     let sheet_width = frame_width
         .checked_mul(columns)
         .ok_or_else(|| "contact sheet width is too large".to_owned())?;

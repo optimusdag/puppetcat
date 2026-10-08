@@ -69,6 +69,23 @@ export component TimelinePane inherits Rectangle {
     callback add-track();
     callback add-marker();
     callback zoom-to-fit(width: length);
+    in property <bool> follow-playhead;
+    callback follow-playhead-changed(follow: bool);
+
+    /// Scrolls so the playhead sits mid-view. Asked for whenever something it
+    /// depends on changes, and a no-op unless the mode is on and the pointer is
+    /// not holding the playhead.
+    function recentre() {
+        if (root.follow-playhead && !lanes.scrubbing && lanes.width > 0px) {
+            root.scrolled(Math.max(0, root.playhead
+                - lanes.width / 1px * root.seconds-per-pixel / 2));
+        }
+    }
+    property <length> view-w: lanes.width;
+    changed playhead => { root.recentre(); }
+    changed follow-playhead => { root.recentre(); }
+    changed seconds-per-pixel => { root.recentre(); }
+    changed view-w => { root.recentre(); }
     callback zoom(factor: float, anchor-seconds: float);
 
     // ── the grid ─────────────────────────────────────────────────────────
@@ -243,6 +260,8 @@ export component TimelinePane inherits Rectangle {
             add-track => { root.add-track(); }
             add-marker => { root.add-marker(); }
             fit => { root.zoom-to-fit(lanes.width); }
+            follow: root.follow-playhead;
+            follow-changed(on) => { root.follow-playhead-changed(on); }
             // No anchor from a button: a wheel zooms about the pointer and a
             // press zooms about the view, since a press has no pointer to
             // speak of. -1 is read as "keep the left edge".

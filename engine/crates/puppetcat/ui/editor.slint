@@ -202,6 +202,8 @@ export global Editor {
     callback range-cleared();
     in-out property <float> frame-rate;
     in-out property <float> scroll-left;
+    /// View chrome, kept here rather than in Rust: the view scrolls itself.
+    in-out property <bool> follow-playhead;
     in-out property <float> seconds-per-pixel;
 
     callback tab-selected(index: int);

@@ -103,6 +103,7 @@ export enum Glyph {
     silence,
     ripple,
     grip,
+    follow,
     // the start screen
     info,
     folder,
@@ -488,6 +489,13 @@ export component Icon inherits Rectangle {
         commands: "M8.5 5a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0 M8.5 12a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0"
             + " M8.5 19a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0 M14.5 5a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0"
             + " M14.5 12a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0 M14.5 19a.5.5 0 1 0 1 0a.5.5 0 1 0 -1 0";
+    }
+
+    // A playhead line held in the middle of a bracketed view — follow
+    // playhead. Two brackets either side of a centre line.
+    if root.glyph == Glyph.follow: Stroked {
+        size: root.size; tint: root.tint; weight: root.weight;
+        commands: "M12 3v18 M6 7l-4 5 4 5 M18 7l4 5-4 5";
     }
 
     // lucide/type

@@ -554,6 +554,10 @@ export component Lanes inherits Rectangle {
     callback range-cleared();
 
     callback scrubbed(seconds: float);
+    /// The pointer is down on the ruler. Follow-playhead stands down for it:
+    /// a view that chases the playhead while the playhead chases the pointer
+    /// never settles.
+    out property <bool> scrubbing: scrub.pressed;
     callback clip-pressed(id: string, additive: bool, edge: int);
     callback clip-dragged(seconds: float, pixels: length);
     callback clip-released();

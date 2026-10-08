@@ -276,6 +276,8 @@ export component Seat inherits Rectangle {
             playhead: Editor.playhead;
             frame-rate: Editor.frame-rate;
             scroll-left: Editor.scroll-left;
+            follow-playhead: Editor.follow-playhead;
+            follow-playhead-changed(on) => { Editor.follow-playhead = on; }
             seconds-per-pixel: Editor.seconds-per-pixel;
 
             tab-selected(index) => { Editor.tab-selected(index); }

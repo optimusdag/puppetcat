@@ -64,6 +64,9 @@ export component TimelineTray inherits Rectangle {
     /// the ruler, for a control that reads as a command rather than a trick.
     callback add-marker();
     callback fit();
+    /// The view scrolls to keep the playhead centred.
+    in property <bool> follow;
+    callback follow-changed(follow: bool);
     callback zoom(factor: float);
 
     height: 40px;
@@ -225,6 +228,13 @@ export component TimelineTray inherits Rectangle {
 
         Divider { }
 
+        IconButton {
+            glyph: Glyph.follow;
+            label: "Follow playhead: keep it centred as the timeline plays";
+            icon-size: 16px;
+            checked: root.follow;
+            clicked => { root.follow-changed(!root.follow); }
+        }
         IconButton {
             glyph: Glyph.fit;
             label: "Zoom to fit";

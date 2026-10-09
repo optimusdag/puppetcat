@@ -41,8 +41,12 @@ fi
 export FFMPEG_DIR
 FFMPEG_DIR=$(brew --prefix ffmpeg)
 
-echo "Building (profile: app)..."
-(cd engine && cargo build --profile app -p puppetcat)
+# `local` (thin LTO, 16 codegen units) by default: the fat-LTO `app` profile
+# spends minutes on one core to squeeze out a few percent. PROFILE=app builds
+# what CI ships.
+profile=${PROFILE:-local}
+echo "Building (profile: $profile)..."
+(cd engine && cargo build --profile "$profile" -p puppetcat)
 
 # The MCP server ships beside the window: the stand-alone server forwards to
 # the window, so the two must come from one build. It uses the release
@@ -51,7 +55,7 @@ echo "Building (profile: app)..."
 echo "Building the MCP server (profile: release)..."
 (cd engine && cargo build --release -p puppetcat-agent --bin puppetcat-agent-mcp)
 
-binary="engine/target/app/puppetcat"
+binary="engine/target/$profile/puppetcat"
 mcp_binary="engine/target/release/puppetcat-agent-mcp"
 for built in "$binary" "$mcp_binary"; do
   if [ ! -f "$built" ]; then

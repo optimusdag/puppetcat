@@ -104,3 +104,13 @@ opt-level = 2
 # assertions anywhere in our own code.
 [profile.dev.package.wgpu-core]
 debug-assertions = false
+# The same build as `app`, minus what costs the minutes: thin LTO and 16
+# codegen units in place of fat LTO and one, so the final link runs on all
+# cores instead of one. For packaging a build to run on this Mac
+# (scripts/package-macos.sh uses it unless PROFILE=app); CI and anything that
+# ships keep `app`. Measured against `app` in the script's header comment.
+[profile.local]
+inherits = "app"
+lto = "thin"
+codegen-units = 16
+

@@ -34,15 +34,19 @@ fn main() {
         let manifest = dir.join("effect.toml");
         let fixtures = dir.join("fixtures.toml");
         println!("cargo:rerun-if-changed={}", manifest.display());
-        println!("cargo:rerun-if-changed={}", fixtures.display());
+        // Only files that exist: cargo treats a missing rerun-if-changed path
+        // as always modified, which rebuilt this crate and everything above
+        // it on every invocation. A file appearing later is caught by the
+        // directory watch on `packages/` above.
         let fixtures = if fixtures.is_file() {
+            println!("cargo:rerun-if-changed={}", fixtures.display());
             format!("Some(include_str!({:?}))", fixtures.display().to_string())
         } else {
             "None".to_owned()
         };
         let shader = dir.join("effect.wgsl");
-        println!("cargo:rerun-if-changed={}", shader.display());
         let shader = if shader.is_file() {
+            println!("cargo:rerun-if-changed={}", shader.display());
             format!("Some(include_str!({:?}))", shader.display().to_string())
         } else {
             "None".to_owned()

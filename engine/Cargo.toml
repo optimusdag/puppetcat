@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.93"
 license = "AGPL-3.0-or-later"  # + plugin exception, see LICENSE-EXCEPTIONS.md
@@ -90,6 +90,16 @@ strip = "symbols"
 
 # Decoding and compositing are unusably slow in an unoptimised build, even when
 # the rest of the engine is being debugged.
+# The same build as `app`, minus what costs the minutes: thin LTO and 16
+# codegen units in place of fat LTO and one, so the final link runs on all
+# cores instead of one. For packaging a build to run on this Mac
+# (scripts/package-macos.sh uses it unless PROFILE=app); CI and anything that
+# ships keep `app`. Measured against `app` in the script's header comment.
+[profile.local]
+inherits = "app"
+lto = "thin"
+codegen-units = 16
+
 [profile.dev.package."*"]
 opt-level = 2
 
@@ -104,13 +114,3 @@ opt-level = 2
 # assertions anywhere in our own code.
 [profile.dev.package.wgpu-core]
 debug-assertions = false
-# The same build as `app`, minus what costs the minutes: thin LTO and 16
-# codegen units in place of fat LTO and one, so the final link runs on all
-# cores instead of one. For packaging a build to run on this Mac
-# (scripts/package-macos.sh uses it unless PROFILE=app); CI and anything that
-# ships keep `app`. Measured against `app` in the script's header comment.
-[profile.local]
-inherits = "app"
-lto = "thin"
-codegen-units = 16
-

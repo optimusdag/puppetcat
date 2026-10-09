@@ -292,6 +292,9 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_start_open_recent(on_window!(|state, path: SharedString| {
         state.open_recent(path.as_str());
     }));
+    app.on_start_open_project(on_window!(|state| {
+        state.open_project_dialog();
+    }));
     app.on_start_forget_recent(on_window!(|state, path: SharedString| {
         state.forget_recent(path.as_str());
     }));
@@ -1267,6 +1270,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             state.refresh_models();
                             state.settings.open = true;
                         }
+                        "open-project" => state.open_project_dialog(),
                         "close-project" => state.close_project(),
                         "undo" => state.undo(),
                         "redo" => state.redo(),

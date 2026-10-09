@@ -3592,6 +3592,37 @@ impl Studio {
         }
     }
 
+    /// Asks for a project folder and opens it, saving and closing the one
+    /// that is open first. The folder is checked before anything is closed, so
+    /// a wrong pick leaves the current edit where it was.
+    pub fn open_project_dialog(&mut self) {
+        let Some(folder) = rfd::FileDialog::new()
+            .set_title("Open project folder")
+            .pick_folder()
+        else {
+            return;
+        };
+        let info = match projects::open(&folder.to_string_lossy()) {
+            Ok(info) => info,
+            Err(error) => {
+                if self.on_start {
+                    self.start.error = error;
+                } else {
+                    self.notify(&error, true);
+                }
+                return;
+            }
+        };
+        if self.session.is_some() {
+            self.close_project();
+            // A failed save keeps the session open; do not open over it.
+            if self.session.is_some() {
+                return;
+            }
+        }
+        self.open_project(info);
+    }
+
     pub fn forget_recent(&mut self, path: &str) {
         if let Err(error) = projects::forget(&self.host.dirs.config, path) {
             self.start.error = error;
@@ -5291,6 +5322,14 @@ impl Studio {
 
         match self.open_menu {
             0 => vec![
+                row(
+                    "open-project",
+                    "Open project…".into(),
+                    Glyph::Folder,
+                    "⌘O",
+                    true,
+                ),
+                rule(),
                 row(
                     "add-selected",
                     "Add selected to timeline".into(),

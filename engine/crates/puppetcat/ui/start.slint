@@ -411,6 +411,8 @@ export component StartScreen inherits Rectangle {
     callback rate-changed(index: int);
     callback preset-chosen(index: int);
     callback create();
+    /// Pick an existing project folder from disk.
+    callback open-project();
     callback open-recent(path: string);
     callback forget-recent(path: string);
     callback dismiss-error();
@@ -680,6 +682,33 @@ export component StartScreen inherits Rectangle {
                                 enabled: root.can-create;
                                 mouse-cursor: pointer;
                                 clicked => { root.create(); }
+                            }
+                        }
+
+                        // The quiet twin of Create: same height, outlined,
+                        // for the project that already exists.
+                        open := Rectangle {
+                            width: open-label.preferred-width + 48px;
+                            height: 40px;
+                            border-radius: self.height / 2;
+                            border-width: 1px;
+                            border-color: Theme.line-strong;
+                            background: open-touch.has-hover ? Theme.field-hover : Colors.transparent;
+                            opacity: root.data.busy ? 0.4 : 1.0;
+
+                            open-label := Text {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                text: "Open project";
+                                color: Theme.fg;
+                                font-size: Theme.fs-xl;
+                                font-weight: Theme.weight-title;
+                            }
+
+                            open-touch := TouchArea {
+                                enabled: !root.data.busy;
+                                mouse-cursor: pointer;
+                                clicked => { root.open-project(); }
                             }
                         }
 

@@ -107,6 +107,7 @@ export component App inherits Window {
     callback start-preset-chosen(index: int);
     callback start-create();
     callback start-open-recent(path: string);
+    callback start-open-project();
     callback start-forget-recent(path: string);
     callback start-dismiss-error();
 
@@ -283,6 +284,10 @@ callback export-closed();
         // thing. Every other row in those menus is a KeyBinding away from
         // working the same way.
         KeyBinding {
+            keys: @keys(Control + O);
+            activated => { root.app-menu-selected("open-project"); }
+        }
+        KeyBinding {
             keys: @keys(Control + S);
             // Nothing on the launch screen has a project to act on, which is
             // why the strip up there is missing the menus this belongs to.
@@ -353,6 +358,7 @@ callback export-closed();
                 preset-chosen(index) => { root.start-preset-chosen(index); }
                 create => { root.start-create(); }
                 open-recent(path) => { root.start-open-recent(path); }
+                open-project => { root.start-open-project(); }
                 forget-recent(path) => { root.start-forget-recent(path); }
                 dismiss-error => { root.start-dismiss-error(); }
             }

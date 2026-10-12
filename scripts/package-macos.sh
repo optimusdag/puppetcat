@@ -126,6 +126,7 @@ for bundled in puppetcat puppetcat-agent-mcp; do
   fi
 done
 
+notarize=0
 identity=$(security find-identity -v -p codesigning 2>/dev/null \
   | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -1)
 if [ -n "$identity" ]; then
@@ -138,6 +139,7 @@ if [ -n "$identity" ]; then
   codesign --verify --deep --strict "$app"
 
   if [ "${NOTARIZE:-1}" != 0 ]; then
+    notarize=1
     creds=${APPLE_SIGNING_ENV:-$HOME/.config/gitlabboards/apple-signing.env}
     # shellcheck disable=SC1090
     [ -f "$creds" ] && . "$creds"
@@ -147,7 +149,7 @@ if [ -n "$identity" ]; then
         exit 1
       fi
     done
-    echo "Notarizing (this waits on Apple, usually a few minutes)..."
+    echo "Notarizing the app (this waits on Apple, usually a few minutes)..."
     zip=$(mktemp -d)/PuppetCat.zip
     ditto -c -k --keepParent "$app" "$zip"
     xcrun notarytool submit "$zip" --apple-id "$APPLE_ID" \
@@ -165,6 +167,18 @@ fi
 dmg="PuppetCat-${version}-macos-${arch}.dmg"
 rm -f "$dmg"
 hdiutil create -volname PuppetCat -srcfolder "$app" -ov -format UDZO "$dmg"
+
+# The DMG gets its own signature and ticket so it opens cleanly (and offline)
+# straight from a download, not only the app inside it.
+if [ "$notarize" = 1 ]; then
+  codesign --force --timestamp -s "$identity" "$dmg"
+  echo "Notarizing the DMG..."
+  xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" \
+    --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+  xcrun stapler staple "$dmg"
+  xcrun stapler validate "$dmg"
+  spctl -a -vv -t open --context context:primary-signature "$dmg"
+fi
 
 echo
 echo "Built $app and $dmg"

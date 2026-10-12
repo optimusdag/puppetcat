@@ -8,7 +8,10 @@
 # deployment-target floor (the app only needs to run here), and no
 # Developer ID - it signs ad-hoc unless one is found in the keychain, the
 # same "opens with a Gatekeeper warning" experience a build from a fork
-# gets in CI.
+# gets in CI. With a Developer ID and notarization credentials (APPLE_ID,
+# APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID, e.g. from
+# ~/.config/gitlabboards/apple-signing.env) it also notarizes and staples.
+# NOTARIZE=0 signs without notarizing.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -133,6 +136,27 @@ if [ -n "$identity" ]; then
   codesign --force --options runtime --timestamp -s "$identity" "$app/Contents/MacOS/puppetcat"
   codesign --force --options runtime --timestamp -s "$identity" "$app"
   codesign --verify --deep --strict "$app"
+
+  if [ "${NOTARIZE:-1}" != 0 ]; then
+    creds=${APPLE_SIGNING_ENV:-$HOME/.config/gitlabboards/apple-signing.env}
+    # shellcheck disable=SC1090
+    [ -f "$creds" ] && . "$creds"
+    for var in APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+      if [ -z "${!var:-}" ]; then
+        echo "package-macos.sh: $var is not set (see $creds); set NOTARIZE=0 to skip notarization" >&2
+        exit 1
+      fi
+    done
+    echo "Notarizing (this waits on Apple, usually a few minutes)..."
+    zip=$(mktemp -d)/PuppetCat.zip
+    ditto -c -k --keepParent "$app" "$zip"
+    xcrun notarytool submit "$zip" --apple-id "$APPLE_ID" \
+      --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+    rm -rf "$(dirname "$zip")"
+    xcrun stapler staple "$app"
+    xcrun stapler validate "$app"
+    spctl -a -vv -t exec "$app"
+  fi
 else
   echo "No Developer ID in the keychain: signing ad-hoc (Gatekeeper will warn once on first open)."
   codesign --force --deep -s - "$app"

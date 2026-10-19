@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 publish = false
 description = "Titles as pixels: shapes a text clip's words and rasterises them onto a frame-sized transparent canvas."
 

@@ -1,0 +1,38 @@
+name: Bug report
+description: Something broke or behaved unexpectedly
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: How were you using PuppetCat?
+      options:
+        - The editor window
+        - An agent over MCP
+        - The CLI
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version and OS
+      description: For example, 0.7.0 on macOS 15 arm64, or a commit if built from source.
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: Media involved
+      description: Codec, resolution and frame rate of the files, if relevant. Please don't attach footage you don't have the right to share.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots

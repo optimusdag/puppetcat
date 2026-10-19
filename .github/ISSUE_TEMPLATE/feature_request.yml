@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest an addition or change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: want
+    attributes:
+      label: What would you like to do?
+      description: Describe the editing task, not just the feature.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where should it work?
+      description: Every feature should be reachable from both the window and MCP.
+      options:
+        - Window and MCP
+        - Window only
+        - MCP / CLI only
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've tried
+  - type: checkboxes
+    id: roadmap
+    attributes:
+      label: Roadmap
+      options:
+        - label: I checked ROADMAP.md and this is not already planned

@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Effect packages: the catalogue of video effects, audio filters, transitions and generators, loaded from manifests rather than written in code."
 
 [dependencies]

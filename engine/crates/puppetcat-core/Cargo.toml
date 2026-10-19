@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Time, arenas, frames and the timeline model shared by every other PuppetCat crate."
 
 # Deliberately empty. puppetcat-core is std-only, and should stay that way: it is the

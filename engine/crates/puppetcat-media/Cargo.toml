@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Getting pixels and samples in and out of media files. The only crate that knows FFmpeg exists."
 
 [dependencies]

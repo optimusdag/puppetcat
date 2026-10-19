@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "Rendering a timeline to a file, and one true frame of it to a monitor. The engine's ownership of what the pixels mean."
 
 [features]

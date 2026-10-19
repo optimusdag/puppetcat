@@ -9,9 +9,6 @@
 Every feature is available to people in the window *and* to agents over MCP.
 
 <p align="center">
-  <a href="https://github.com/optimusdag/puppetcat/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/optimusdag/puppetcat/ci.yml?style=flat&logo=githubactions&logoColor=F8F8F8&label=Build&labelColor=000000&color=c6f432" alt="Build Status" /></a>
-  <a href="https://github.com/optimusdag/puppetcat/releases/latest"><img src="https://img.shields.io/badge/Download-macOS%20%7C%20Windows%20%7C%20Linux-c6f432?style=flat&logo=desktop-download&logoColor=F8F8F8&labelColor=000000" alt="Download PuppetCat" /></a>
-  <a href="https://github.com/optimusdag/puppetcat/releases"><img src="https://img.shields.io/github/v/release/optimusdag/puppetcat?include_prereleases&label=Version&style=flat&logo=semver&logoColor=F8F8F8&labelColor=000000" alt="Latest PuppetCat release" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-c6f432?style=flat&logo=gnu&logoColor=F8F8F8&labelColor=000000" alt="License: AGPL-3.0-or-later" /></a>
 </p>
 

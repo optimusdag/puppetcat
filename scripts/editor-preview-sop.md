@@ -1,41 +1,22 @@
-# SOP: updating the README hero screenshot
+# SOP: updating the README screenshot
 
-The image at the top of `README.md` is `assets/editor-preview.png` — a single
-frame that is the **dark theme on the left half** and the **light theme on the
-right half**, joined at the vertical center line. Because both screenshots show
-the identical window state, the seam falls invisibly through the middle of the
-preview pane.
+The image at the top of `README.md` is `assets/editor-screenshot.png`, a single
+screenshot of the editor window.
 
 ## Steps
 
 1. **Run the app** — `cd engine && cargo run --release -p puppetcat`. Stage something presentable:
-   a clip in the media bin, a couple of tracks on the timeline, the playhead
-   somewhere interesting. Avoid personal file names in the media panel.
+   media in the bin, a couple of tracks on the timeline, the playhead
+   somewhere interesting. Use media you have the right to publish, and avoid
+   personal file names in the media panel.
 
-2. **Take the dark screenshot.** With the app in dark theme, press
-   `⌘⇧4`, then `Space`, then click the PuppetCat window (captures just the
-   window). Don't move or resize the window after this.
+2. **Take the screenshot.** On macOS press `⌘⇧4`, then `Space`, then click the
+   PuppetCat window (this captures just the window).
 
-3. **Switch to light theme** (the sun/moon toggle in the title bar) and take
-   the second screenshot the same way. **Don't touch anything else** — same
-   window size, same panels, same playhead. Any drift shows at the seam.
+3. **Replace `assets/editor-screenshot.png`** with it. The README references the
+   file by path, so no README edit is needed.
 
-4. **Build the split:**
+4. **Check the result** — open the README preview and confirm the image is
+   sharp and shows nothing private.
 
-   ```sh
-   scripts/make-editor-preview.sh ~/Desktop/Screenshot*<time1>*.png ~/Desktop/Screenshot*<time2>*.png
-   ```
-
-   First argument is the **dark** screenshot, second is the **light** one.
-   Tab-complete or glob the paths — macOS puts a narrow no-break space before
-   "AM"/"PM" in screenshot names, so a hand-typed regular space won't match.
-
-   The script verifies both images are the same size, copies them to
-   `assets/screenshot-dark.png` / `assets/screenshot-light.png`, and writes
-   `assets/editor-preview.png`.
-
-5. **Check the result** — open `assets/editor-preview.png` and look at the
-   center seam. If panels are misaligned, retake both screenshots.
-
-6. **Commit** the three changed files in `assets/`. The README references
-   `assets/editor-preview.png` by path, so no README edit is needed.
+5. **Commit** the changed file.

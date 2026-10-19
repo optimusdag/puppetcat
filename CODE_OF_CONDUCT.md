@@ -59,8 +59,10 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-**optimusdag@gmail.com**.
+reported to the community leaders responsible for enforcement through the
+repository: open an issue at <https://github.com/optimusdag/puppetcat/issues>
+asking for a private channel, and leave the details out of it. A leader will
+reply and move the conversation somewhere private.
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the

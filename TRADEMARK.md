@@ -67,7 +67,8 @@ it is the same courtesy this project was given by Concat.
 ## Asking
 
 Anything not covered above, or a use you want blessed explicitly:
-**optimusdag@gmail.com**. Reasonable requests get a yes.
+open an issue at <https://github.com/optimusdag/puppetcat/issues>.
+Reasonable requests get a yes.
 
 *This policy may be updated. Changes are not retroactive against uses that were
 permitted when made.*

@@ -13,9 +13,8 @@ OS, the media you used — is worth more than most patches.
 
 ## Before you write code
 
-Open an issue first for anything beyond a small fix. Large
-areas of [`ROADMAP.MD`](ROADMAP.MD) are inherited from upstream and may be
-in progress, deferred, or no longer the direction this fork wants, and it is
+Open an issue first for anything beyond a small fix. Items on the
+[`ROADMAP.md`](ROADMAP.md) may be in progress or deferred, and it is
 genuinely no fun to review a big PR that has to be turned down for reasons
 that were invisible from outside.
 

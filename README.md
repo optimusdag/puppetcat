@@ -142,7 +142,7 @@ Ready to write code? [CONTRIBUTING.md](./CONTRIBUTING.md) covers setup, layout, 
 
 ## Roadmap
 
-Read [ROADMAP.MD](./ROADMAP.MD).
+Read [ROADMAP.md](./ROADMAP.md).
 
 ## License
 

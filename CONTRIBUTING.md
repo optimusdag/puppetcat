@@ -36,7 +36,7 @@ Slint UI - is one Cargo workspace under `engine/`.
 | Path | What lives there |
 |---|---|
 | `engine/crates/` | The engine (core, media, render, export, project), the host layer (`puppetcat-host`, `puppetcat-speech`), the CLI, and `puppetcat`, the Slint editor window |
-| `test/` | Media and analysis fixtures |
+| `test/` | Python prototypes for candidate features |
 
 [`ARCHITECTURE.md`](ARCHITECTURE.md) explains how these fit together and where
 the sharp edges are. Read it before touching the engine.
@@ -102,4 +102,4 @@ Concat, the project it was forked from.
 ## Conduct
 
 [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) applies to the repo and its
-Discussions.
+issues and pull requests.

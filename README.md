@@ -18,12 +18,12 @@ Every feature is available to people in the window *and* to agents over MCP.
 
 ---
 
-PuppetCat is a fork of [Concat](https://github.com/jub0t/Concat), an
-open-source CapCut replacement. It does everything you use CapCut for —
-without the watermarks, paywalls, or subscriptions. A native Rust engine does
-the heavy lifting, a native interface does the editing, and it all runs on
-your machine: install it and start cutting, no account and no setup. (The
-speech models for captions and text-to-speech download once, on first use.)
+PuppetCat is a fork of [Concat](https://github.com/jub0t/Concat) that makes
+the editor scriptable by AI agents. A native Rust engine does the work and
+runs on your machine: no watermarks, no account, no subscription. You edit in
+the window, an agent edits over [MCP](#built-for-agents), and both work on the
+same project. (The speech models for captions and text-to-speech download
+once, on first use.)
 
 **Where PuppetCat differs from Concat is who it is built for.** Concat is an
 editor for a person at a window. PuppetCat is built to be operated by AI

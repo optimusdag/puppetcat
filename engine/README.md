@@ -15,14 +15,17 @@ The video engine behind PuppetCat. Rust, no GC, no hidden control flow.
 | `puppetcat-cli` | A binary to drive the above. The vertical slice. | the engine crates |
 | `puppetcat-host` | What the window needs that is not the edit: sessions, project folders, previews, playback, templates, job slots. | `puppetcat-media`, `puppetcat-project`, `puppetcat-export`, cpal |
 | `puppetcat-speech` | Transcription (whisper.cpp, in-process) and text to speech (Kokoro via sherpa-onnx). | `puppetcat-host`, `puppetcat-media`, whisper-rs, sherpa-onnx |
-| `puppetcat` | The editor window: every pane, dialog and primitive, in Slint. The app a user launches. | slint, `puppetcat-host`, `puppetcat-speech` |
+| `puppetcat-text` | Titles as pixels: shapes text and paints plate, shadow, outline and fill onto a frame-sized canvas. Used by `puppetcat-host`. | none of the engine crates |
+| `puppetcat-agent` | The agent surface: an MCP server (`puppetcat-agent-mcp`) and an in-process engine for driving a project with no window, plus the bridge that lets a running window host the tools. | `puppetcat-host`, `puppetcat-export`, `puppetcat-effects`, `puppetcat-speech`, rmcp |
+| `puppetcat` | The editor window: every pane, dialog and primitive, in Slint. The app a user launches. | slint, `puppetcat-host`, `puppetcat-speech`, `puppetcat-agent` |
 
 The dependency arrows point one way:
 
 ```
-puppetcat -> puppetcat-speech -> puppetcat-host -> {export, project, media} -> core
-                                       -> render -> core
-                                          export -> effects -> project
+puppetcat ------> puppetcat-speech -> puppetcat-host -> {export, project, media} -> core
+    |                                       |             -> render -> core
+    +-> puppetcat-agent -> host, speech     +-> text      export -> effects -> project
+puppetcat-agent-mcp (binary) -> puppetcat-agent
 ```
 
 If you ever find yourself wanting `core` to depend on `media`, something has

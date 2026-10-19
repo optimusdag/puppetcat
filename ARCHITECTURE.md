@@ -1,6 +1,6 @@
 # PuppetCat Architecture
 
-A study map of the system as it stands in September 2026: what each layer
+A study map of the system as it stands in October 2026: what each layer
 owns, how they talk, where the sharp edges are, and what deserves attention
 next. File references are current as of this writing.
 
@@ -13,6 +13,9 @@ flowchart LR
     subgraph WINDOW["engine/crates/puppetcat — the window (Slint)"]
         UI["ui/*.slint<br/>panes, dialogs, primitives"]
         MAIN["src/main.rs · studio.rs<br/>bindings, view state"]
+    end
+    subgraph AGENT["puppetcat-agent"]
+        MCP["MCP server · bridge<br/>edit plans, queries, snapshots"]
     end
     subgraph HOST["puppetcat-host · puppetcat-speech"]
         SESSION[Session]
@@ -27,10 +30,13 @@ flowchart LR
         EFFECTS[puppetcat-effects]
         EXPORT[puppetcat-export]
         RENDER[puppetcat-render]
+        TEXT[puppetcat-text]
         MEDIA[puppetcat-media]
         CORE[puppetcat-core]
     end
     MAIN --> HOST
+    MAIN <-. hosts the tools .-> MCP
+    MCP --> HOST
     HOST --> ENGINE
     MEDIA -. links .-> FF["libavformat · libavcodec<br/>libavfilter · libswscale · libswresample"]
     SPEECH -. compiles in .-> W["whisper.cpp · sherpa-onnx"]
@@ -43,28 +49,48 @@ history, the render path, the document format, and the codecs. When a
 feature is being designed, the first question is "which engine crate does
 this belong to".
 
-There is no wire, no JSON boundary, no second language: the window calls
-Rust functions in-process. The rule therefore has nothing to enforce it but
-discipline, and the risk is that editing logic leaks into the window without
-anyone noticing. The test for a change is whether it could be driven from
-`puppetcat-cli` without a window; if not, it is in the wrong place.
+**One engine, two front ends.** The window calls Rust functions in-process;
+an agent reaches the same functions through `puppetcat-agent`, which speaks
+MCP over stdio and, when a window is open, forwards to it (§2.1). The rule
+has nothing to enforce it but discipline, and the risk is that editing logic
+leaks into the window without anyone noticing. The test for a change is
+whether it could be driven from `puppetcat-cli` or an agent tool without a
+window; if not, it is in the wrong place. A feature is not done until an
+agent can reach it.
 
 The dependency arrows point one way:
 
 ```
 puppetcat (window) → puppetcat-speech → puppetcat-host → {export, project, media} → core
-                                              → render → core
-                                                 export → effects → project
+        ↓                                       ↓ → render → core
+ puppetcat-agent → host, speech, effects        ↓ → text
+ (puppetcat-agent-mcp)                             export → effects → project
 ```
 
 `puppetcat-core` depends on nothing. `puppetcat-project` knows nothing about
 rendering. `puppetcat-media` is the only crate that knows FFmpeg exists.
 `puppetcat-effects` knows what an effect *is* (its manifest and its template)
 and nothing about running one; the decoder runs FFmpeg chains and the
-compositor will run shaders.
+compositor runs WGSL shaders.
 
 | Crate | Lines | Tests | Owns |
 |---|---|---|---|
+| `puppetcat-core` | 2.4k | 41 | Rational time, frame model, arena handles, timeline model. Zero dependencies. |
+| `puppetcat-media` | 4.0k | 44 | Linked FFmpeg: probe, video decode with filter graphs and frame pacing, audio decode through a graph, H.264 encode, AAC mixing through libavfilter, muxing, waveform peaks, the reader pool with its byte-budgeted frame cache, JPEG stills. |
+| `puppetcat-project` | 6.4k | 52 | The document: model, every edit command, undo `Editor`, `puppetcat.json` round-trip. |
+| `puppetcat-render` | 1.9k | 30 | Compositing. `CpuCompositor` is the reference; `WgpuCompositor` behind `gpu`, which also runs WGSL effects. |
+| `puppetcat-effects` | 2.5k | 28 | Effect packages: the manifest format, the chain-template expression language, the catalogue. Every built-in effect is a folder under `packages/`, compiled in; user packages load from a directory. |
+| `puppetcat-export` | 3.9k | 42 | Timeline → file: flatten, the frame-by-frame render loop, the paused monitor's true frame. Chains come from `puppetcat-effects`. |
+| `puppetcat-text` | 0.6k | 4 | Titles as pixels: shapes text and paints plate, shadow, outline and fill onto a frame-sized canvas. |
+| `puppetcat-host` | 6.2k | 35 | Sessions, project folders and recents, cross-process project locks, media caches beside the project, the monitor's reader pool, the export slot, batch export, audio playback, templates and layouts, media analysis (beats, scenes, silence), one-at-a-time job slots, app directories. |
+| `puppetcat-speech` | 1.3k | 7 | Transcription (whisper.cpp in-process) and text to speech (Kokoro via sherpa-onnx), with model downloads, and the caption and voice edits both front ends share. |
+| `puppetcat-agent` | 7.2k | 24 | The agent surface: the MCP server and `puppetcat-agent-mcp` binary, `AgentEngine` (a full session with no window), edit plans, queries, snapshots and contact sheets, project and media lifecycle, and the bridge that lets a window host the tools. |
+| `puppetcat-cli` | 0.2k | 3 | Probe/render vertical slice for testing the engine without the app. |
+| `puppetcat` | 10.2k Rust + 18.2k Slint | 10 | The window. Every pane, dialog and primitive, bound to the host layer: sessions, imports, gestures as commands, the monitor, playback, export, speech, and hosting the agent's tools. |
+
+(Line and test counts are approximate and drift; regenerate them rather than trusting them.)
+
+---|---|---|---|
 | `puppetcat-core` | 1.6k | 31 | Rational time, frame model, arena handles, timeline model. Zero dependencies. |
 | `puppetcat-media` | 3.4k | 39 | Linked FFmpeg: probe, video decode with filter graphs and frame pacing, audio decode through a graph, H.264 encode, AAC mixing through libavfilter, muxing, waveform peaks, the reader pool with its byte-budgeted frame cache, JPEG stills. |
 | `puppetcat-project` | 3.3k | 41 | The document: model, every edit command, undo `Editor`, `puppetcat.json` round-trip. |
@@ -115,6 +141,28 @@ Key properties:
   saved as `wolfcut.json` or `concat.json` still open; new ones are written
   as `puppetcat.json`, with the version key the app's current name. The
   reader never looks at that key.
+
+### 2.1 The agent path
+
+`puppetcat-agent` drives the same `Session` and `Command`s the window does.
+`mcp` is the only module that knows MCP exists; `AgentEngine`, the snapshot
+renderer and the export job would work behind a CLI or HTTP server just as
+well.
+
+- **Headless or attached.** `puppetcat-agent-mcp` works on its own, or, when a
+  window is open, forwards each call over a Unix socket in the app's config
+  directory. The window implements `SessionProvider`: it hands the session
+  over for the length of a call and takes it back, so an agent's edits land in
+  the open window's undo history. The bridge is Unix-only for now.
+- **Edit plans.** `apply_edit_plan` stages a batch of operations on a copy,
+  validates it, and applies it as one undoable edit. A plan carries a revision
+  token (a stale one is refused), and later operations may reference ids
+  minted by earlier ones. `dryRun` returns the plan diff without applying.
+- **Project ownership.** `puppetcat-host`'s `lock` keeps one lock file per
+  project folder for the window and one for the agent session, released by
+  the OS when the process dies. An agent always wins; two windows take turns.
+- **Seeing the result.** `render_snapshot` and `render_contact_sheet` let an
+  agent look at a frame or a range before and after an edit.
 
 ---
 
@@ -312,21 +360,11 @@ does not know the invariant, or a piece of work with a known shape.
 
 Every flow in §7 needs a real project put through it, and the window has no
 tests of its own. Known items: the clip context menu's actions did not take
-effect in one report; timeline clips draw no filmstrip (audio clips draw
-their waveform, and `lanes.slint` has the slot); the monitor's failures log
-to stderr and toast once. The durable fix is a headless harness that drives
+effect in one report; the monitor's failures log to stderr and toast once. The durable fix is a headless harness that drives
 `Studio` against a `Session` without a window and snapshots what it
 publishes, so this class of bug is caught by a test.
 
-### 8.2 Title clips need a rasteriser in the engine
-
-`ExportRequest` takes rasterised titles as image clips, and nothing in the
-tree draws text into a `Frame`. The work is a text rasteriser (a
-`cosmic-text`/`fontdue`-shaped crate against the embedded Inter and Synonym
-faces) in the engine, so titles render identically in the monitor and the
-export.
-
-### 8.3 Fades count output frames
+### 8.2 Fades count output frames
 
 `Decoder` runs a clip's chain on each *paced* output frame, so a `fade` in a
 chain counts output frames - which is what `resolve_transitions` assumes when
@@ -334,29 +372,32 @@ it computes `nb_frames` at the output rate. Compare an exported dissolve
 frame for frame against an `ffmpeg` command-line render of the same graph
 before trusting it.
 
-### 8.4 Lock discipline in `playback.rs`
+### 8.3 Lock discipline in `playback.rs`
 
 28 `unwrap`/`expect` sites across four kinds of threads (mix callback,
 transport, decode workers, cache sweep). One panic in a decode worker poisons
 a mutex and cascades. Pick one poison policy (probably: clear the poisoned
 state and carry on, since every cache here is rebuildable) and apply it once.
 
-### 8.5 Unbounded growth
+### 8.4 Unbounded growth
 
-- `redo: Vec<Project>` in `puppetcat-project`'s editor has **no cap** (undo is
-  capped at 200); each entry is a deep clone of the whole project.
+- The editor's undo stack is capped at 200 full `Project` clones, and the redo
+  stack only ever holds entries popped from it, so both are bounded; but each
+  entry is a deep clone of the whole project, so a large project costs real
+  memory at depth.
 - The reader pool's cache is bounded; the window's image cache for filmstrips
-  needs a bound too, or a long session accumulates textures. Filmstrips are
-  raw RGBA `Frame`s with no disk cache; posters are cached as JPEG.
+  should be checked for a bound too, or a long session accumulates textures.
+  Filmstrips are raw RGBA `Frame`s with no disk cache; posters are cached as
+  JPEG.
 
-### 8.6 The mix has no end-to-end test
+### 8.5 The mix has no end-to-end test
 
 `mix_graph` is pinned by a dozen unit tests, and the export loop has tests
 that render synthetic video; `mix_to_file` and `mux` are exercised by no
 test with real audio. Write one against a generated tone before anything
 else touches the audio path.
 
-### 8.7 Build environment
+### 8.6 Build environment
 
 - FFmpeg 7 is the floor (the display matrix lives in `coded_side_data` from
   7.0; the code reads it there). Ubuntu 24.04 ships 6.1, hence the BtbN
@@ -365,19 +406,20 @@ else touches the audio path.
 - `whisper-rs-sys` builds whisper.cpp with cmake at build time; `sherpa-onnx-
   sys` downloads prebuilt static libraries at build time. A clean build needs
   the network twice (three times counting `skia-bindings`) and several
-  minutes. The workspace lock resolves 746 crates.
-- The workflows (`ci.yml`, `build-app.yml`, `release.yml`) have to be run
-  green on all three platforms. Windows (libclang via chocolatey,
+  minutes. The workspace lock resolves about 760 crates.
+- The workflows (`ci.yml`, `nix.yml`, `build-app.yml`, `nightly.yml`,
+  `release.yml`) have to be run green on all three platforms; only macOS is
+  tested today. Windows (libclang via chocolatey,
   `FFMPEG_DIR`, MSVC for whisper.cpp) is the one to watch.
 
-### 8.8 DTO shapes in the export path
+### 8.7 DTO shapes in the export path
 
 `ExportClip`, `ExportRequest` and `PreviewFrameRequest` are JSON-shaped
 DTOs. `puppetcat-export` could take the engine's `Project` and settings
 directly and drop the flattening-through-a-DTO; the `serde` derives on the
 host's view types go with them.
 
-### 8.9 Panics in runtime paths
+### 8.8 Panics in runtime paths
 
 Engine `.expect()`s exist in `decode.rs`, `encode.rs`, `pool.rs` and
 `time.rs` ("rational overflowed i64"). Most are genuine invariants
@@ -385,7 +427,7 @@ Engine `.expect()`s exist in `decode.rs`, `encode.rs`, `pool.rs` and
 if wrong. The host's `templates.rs` and `media.rs` counts are dominated by
 tests, which is fine.
 
-### 8.10 Housekeeping
+### 8.9 Housekeeping
 
 - **Zero TODO/FIXME/HACK comments** in the tree. Invariants live in prose
   comments instead; keep it that way.
@@ -395,12 +437,15 @@ tests, which is fine.
 
 ## 9. Test coverage map
 
+Counts are approximate `#[test]` totals and drift.
+
 | Area | Tests | Gaps |
 |---|---|---|
-| Engine crates | 170 (core 31, media 39, project 41, render 28, effects 22, export 6, cli 3) | `mix_to_file`/`mux` untested end to end (§8.6); `gpu` feature untested at defaults |
-| Host | 22 | `Playback` (threads, cpal) has unit tests only for the WAV walk and the sweep; no test drives the decode workers |
-| Speech | 6 | Model downloads and whisper itself are network- and model-bound; test with `tiny.en` behind an opt-in feature |
-| Window | 3 | Formatting helpers only. Drive `Studio` against a `Session` from a headless harness and snapshot what it publishes |
+| Engine crates | ~250 (core 41, media 44, project 52, render 30, effects 28, export 42, text 4, cli 3) | `mix_to_file`/`mux` untested end to end (§8.5); `gpu` feature untested at defaults |
+| Host | ~35 | `Playback` (threads, cpal) has unit tests only for the WAV walk and the sweep; no test drives the decode workers |
+| Agent | ~24 | The bridge's Unix-socket path and a window-hosted session are not exercised end to end; edit plans, lifecycle and tools are |
+| Speech | ~7 | Model downloads and whisper itself are network- and model-bound; test with `tiny.en` behind an opt-in feature |
+| Window | ~10 | Mostly formatting helpers. Drive `Studio` against a `Session` from a headless harness and snapshot what it publishes |
 
 The real-media tests generate their own fixtures with the linked encoder
 (a 90-frame colour ramp, a 60-frame strip) so they run anywhere the engine
@@ -412,14 +457,13 @@ variable frame rate, and odd containers are the cases most likely to bite.
 ## 10. Where to improve first (opinionated)
 
 1. **Put a real project through every flow in the window** (§8.1) and fix
-   what breaks; then filmstrips on the lanes.
-2. **A tone-based mix test** (§8.6) before touching the audio path again.
-3. **A text rasteriser in the engine** (§8.2) - the one feature the Rust
-   tree cannot express today.
-4. **One poison policy** in `playback.rs` (§8.4) - mechanical, removes the
+   what breaks.
+2. **A tone-based mix test** (§8.5) before touching the audio path again.
+3. **One poison policy** in `playback.rs` (§8.3) - mechanical, removes the
    cascade failure mode.
-5. **Cap the redo stack** (§8.5) - a small patch, a real leak.
-6. **Green CI on all three platforms** (§8.7), then package the window and
-   restore automatic alpha releases.
-7. **Frame-for-frame compare an exported dissolve** against an `ffmpeg`
-   command-line render (§8.3).
+4. **Test Windows and Linux** (§8.6): CI builds every platform, but only macOS
+   is tested, and the agent bridge is Unix-only.
+5. **Frame-for-frame compare an exported dissolve** against an `ffmpeg`
+   command-line render (§8.2).
+6. **Let an agent verify its own edits** - snapshots exist; add checks that
+   compare before and after (see the roadmap).
